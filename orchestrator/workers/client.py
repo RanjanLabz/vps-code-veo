@@ -1,7 +1,9 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from datetime import datetime, timezone
 from typing import Any
+
+import asyncio
 
 import httpx
 
@@ -11,8 +13,12 @@ from orchestrator.workers.models import WorkerRecord, WorkerStatus
 
 class WorkerClient:
     def __init__(self, timeout_seconds: float = 20, api_key: str | None = None) -> None:
-        self._client = httpx.AsyncClient(timeout=timeout_seconds)
+        timeout = httpx.Timeout(connect=min(8.0, timeout_seconds), read=timeout_seconds, write=timeout_seconds, pool=timeout_seconds)
+        limits = httpx.Limits(max_connections=100, max_keepalive_connections=20)
+        self._client = httpx.AsyncClient(timeout=timeout, limits=limits)
         self._api_key = api_key
+        self._retries = 3
+        self._retry_backoff_seconds = 0.6
 
     async def close(self) -> None:
         await self._client.aclose()
@@ -53,7 +59,7 @@ class WorkerClient:
             return WorkerStatus(vps_id=worker.id, base_url=base_url, online=False, max_jobs=worker.max_jobs, error=str(exc))
 
     async def accounts(self, worker: WorkerRecord) -> list[dict[str, Any]]:
-        response = await self._client.get(f"{worker.base_url.rstrip('/')}/accounts", headers=self._headers())
+        response = await self._request_with_retries("GET", f"{worker.base_url.rstrip('/')}/accounts")
         response.raise_for_status()
         data = response.json()
         return list(data) if isinstance(data, list) else []
@@ -99,14 +105,27 @@ class WorkerClient:
             "preferred_account_id": job.preferred_account_id,
             **job.payload,
         }
-        response = await self._client.post(f"{worker.base_url.rstrip('/')}/jobs", json=body, headers=self._headers())
+        response = await self._request_with_retries("POST", f"{worker.base_url.rstrip('/')}/jobs", json=body)
         response.raise_for_status()
         return dict(response.json())
 
     async def job(self, worker: WorkerRecord, job_id: str) -> dict[str, Any]:
-        response = await self._client.get(f"{worker.base_url.rstrip('/')}/jobs/{job_id}", headers=self._headers())
+        response = await self._request_with_retries("GET", f"{worker.base_url.rstrip('/')}/jobs/{job_id}")
         response.raise_for_status()
         return dict(response.json())
+
+    async def _request_with_retries(self, method: str, url: str, **kwargs: Any) -> httpx.Response:
+        last_exc: Exception | None = None
+        for attempt in range(1, self._retries + 1):
+            try:
+                return await self._client.request(method, url, headers=self._headers(), **kwargs)
+            except (httpx.ConnectTimeout, httpx.ReadTimeout, httpx.ConnectError, httpx.RemoteProtocolError) as exc:
+                last_exc = exc
+                if attempt >= self._retries:
+                    break
+                await asyncio.sleep(self._retry_backoff_seconds * attempt)
+        assert last_exc is not None
+        raise last_exc
 
     def _headers(self) -> dict[str, str]:
         return {"x-api-key": self._api_key} if self._api_key else {}
