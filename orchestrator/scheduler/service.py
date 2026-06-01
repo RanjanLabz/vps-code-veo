@@ -118,14 +118,20 @@ class GlobalScheduler:
         for job in processing:
             worker = self.capacity.registry.get(job.assigned_worker_id)
             if worker is None:
+                await self._timeout_stale_processing_job(job, "assigned VPS is no longer registered")
                 continue
             try:
                 worker_job = await self.worker_client.job(worker, job.worker_job_id)
             except Exception:
                 logger.exception("failed to sync worker job status job_id=%s worker_job=%s", job.id, job.worker_job_id)
+                await self._timeout_stale_processing_job(job, "local worker job is no longer visible")
                 continue
             worker_state = str(worker_job.get("state") or "")
+            if not worker_state:
+                await self._timeout_stale_processing_job(job, "local worker returned no job state")
+                continue
             if worker_state not in {JobState.COMPLETED, JobState.FAILED, JobState.TIMEOUT}:
+                await self._timeout_stale_processing_job(job, f"local worker still reports {worker_state}")
                 continue
             job.state = JobState(worker_state)
             job.completed_at = datetime.now(timezone.utc)
@@ -144,3 +150,23 @@ class GlobalScheduler:
                 job.worker_job_id,
                 job.state,
             )
+
+    async def _timeout_stale_processing_job(self, job: GlobalJob, reason: str) -> bool:
+        age_seconds = (datetime.now(timezone.utc) - job.created_at).total_seconds()
+        if age_seconds < self.settings.queue.stale_processing_seconds:
+            return False
+        job.state = JobState.TIMEOUT
+        job.completed_at = datetime.now(timezone.utc)
+        job.last_error = f"Stale processing job timed out after {int(age_seconds)}s: {reason}"
+        job.stamp("global_timeout")
+        await self.queue.save(job)
+        await self.store.save_job(job)
+        logger.warning(
+            "global stale processing job timed out job_id=%s worker=%s worker_job=%s age_seconds=%s reason=%s",
+            job.id,
+            job.assigned_worker_id,
+            job.worker_job_id,
+            int(age_seconds),
+            reason,
+        )
+        return True

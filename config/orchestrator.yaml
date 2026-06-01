@@ -12,6 +12,7 @@ queue:
   scheduler_interval_seconds: 1.0
   status_sync_interval_seconds: 5.0
   dispatch_timeout_seconds: 30
+  stale_processing_seconds: 3600
 
 workers: []
 

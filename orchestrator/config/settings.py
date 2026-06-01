@@ -23,6 +23,7 @@ class QueueSettings(BaseModel):
     scheduler_interval_seconds: float = Field(default=1.0, gt=0)
     status_sync_interval_seconds: float = Field(default=5.0, gt=0)
     dispatch_timeout_seconds: int = Field(default=30, ge=5)
+    stale_processing_seconds: int = Field(default=3600, ge=60)
 
 
 class FlowGenerationSettings(BaseModel):
