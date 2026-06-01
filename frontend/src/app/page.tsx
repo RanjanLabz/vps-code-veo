@@ -233,6 +233,9 @@ const EMPTY_SETTINGS: FlowSettings = {
   image_to_video: {},
 };
 
+const ACTIVE_JOB_STATES = new Set(["QUEUED", "ASSIGNED", "PROCESSING", "RETRYING"]);
+const PROCESSING_JOB_STATES = new Set(["ASSIGNED", "PROCESSING", "RETRYING"]);
+
 function cls(...items: Array<string | false | null | undefined>) {
   return items.filter(Boolean).join(" ");
 }
@@ -509,9 +512,17 @@ export default function Home() {
   }, [workers]);
 
   const globalQueued = jobs.filter((job) => ["QUEUED", "RETRYING"].includes(job.state) && !job.assigned_worker_id).length;
-  const activeDispatches = jobs.filter((job) => ["ASSIGNED", "PROCESSING", "RETRYING"].includes(job.state)).length;
-  const activeJob = jobs.find((job) => ["ASSIGNED", "PROCESSING", "RETRYING"].includes(job.state));
-  const queueJobs = jobs.filter((job) => ["QUEUED", "RETRYING"].includes(job.state) && !job.assigned_worker_id);
+  const sortedJobs = useMemo(() => {
+    return [...jobs].sort((a, b) => {
+      const aActive = ACTIVE_JOB_STATES.has(a.state) ? 1 : 0;
+      const bActive = ACTIVE_JOB_STATES.has(b.state) ? 1 : 0;
+      if (aActive !== bActive) return bActive - aActive;
+      return (parseTime(b.created_at) || 0) - (parseTime(a.created_at) || 0);
+    });
+  }, [jobs]);
+  const activeDispatches = sortedJobs.filter((job) => PROCESSING_JOB_STATES.has(job.state)).length;
+  const activeJob = sortedJobs.find((job) => PROCESSING_JOB_STATES.has(job.state));
+  const queueJobs = sortedJobs.filter((job) => ["QUEUED", "RETRYING"].includes(job.state) && !job.assigned_worker_id);
 
   async function refresh(silent = false) {
     if (!silent) setBusy("Refreshing");
@@ -893,7 +904,7 @@ export default function Home() {
             <Panel title="Global Queue">
               <div className="grid gap-3">
                 {jobs.length === 0 && <Empty text="No jobs found in the global queue." />}
-                {jobs.slice(0, 12).map((job) => (
+                {sortedJobs.slice(0, 12).map((job) => (
                   <JobCard key={job.id} job={job} />
                 ))}
               </div>
