@@ -11,6 +11,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     xvfb \
     fluxbox \
     x11vnc \
+    git \
     fonts-liberation \
     libasound2 \
     libatk-bridge2.0-0 \
@@ -28,10 +29,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxkbcommon0 \
     libxrandr2 \
     xdg-utils \
-    && install -d -m 0755 /etc/apt/keyrings \
-    && curl -fsSL https://dl.google.com/linux/linux_signing_key.pub | gpg --dearmor -o /etc/apt/keyrings/google-linux.gpg \
-    && echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/google-linux.gpg] http://dl.google.com/linux/chrome/deb/ stable main" > /etc/apt/sources.list.d/google-chrome.list \
-    && apt-get update && apt-get install -y --no-install-recommends google-chrome-stable \
+    chromium \
+    && if [ "$(dpkg --print-architecture)" = "amd64" ]; then \
+      install -d -m 0755 /etc/apt/keyrings; \
+      curl -fsSL https://dl.google.com/linux/linux_signing_key.pub | gpg --dearmor -o /etc/apt/keyrings/google-linux.gpg; \
+      echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/google-linux.gpg] http://dl.google.com/linux/chrome/deb/ stable main" > /etc/apt/sources.list.d/google-chrome.list; \
+      apt-get update; \
+      apt-get install -y --no-install-recommends google-chrome-stable; \
+    else \
+      ln -sf /usr/bin/chromium /usr/bin/google-chrome; \
+    fi \
+    && pip install --no-cache-dir websockify \
+    && git clone --depth 1 https://github.com/novnc/noVNC.git /opt/noVNC \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

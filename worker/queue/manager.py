@@ -21,6 +21,8 @@ class QueueManager:
         self.job_ids_key = f"{settings.name}:job_ids"
 
     async def connect(self) -> None:
+        if not self.redis_url or self.redis_url.startswith("${"):
+            raise RuntimeError("REDIS_URL is required for the worker queue")
         self.redis = Redis.from_url(self.redis_url, decode_responses=True)
         await self.redis.ping()
 
@@ -96,9 +98,33 @@ class QueueManager:
 
     async def stats(self) -> dict:
         assert self.redis is not None
+        await self.cleanup_active()
         return {
             "ready": await self.redis.llen(self.ready_key),
             "delayed": await self.redis.zcard(self.delayed_key),
             "active": await self.redis.hlen(self.active_key),
             "total_jobs": await self.redis.zcard(self.job_ids_key),
         }
+
+    async def cleanup_active(self) -> int:
+        assert self.redis is not None
+        active_ids = await self.redis.hkeys(self.active_key)
+        if not active_ids:
+            return 0
+        raw_jobs = await self.redis.hmget(self.jobs_key, active_ids)
+        stale_ids: list[str] = []
+        terminal = {JobState.COMPLETED, JobState.FAILED, JobState.TIMEOUT}
+        for job_id, raw in zip(active_ids, raw_jobs, strict=False):
+            if not raw:
+                stale_ids.append(job_id)
+                continue
+            try:
+                job = Job.model_validate_json(raw)
+            except Exception:
+                stale_ids.append(job_id)
+                continue
+            if job.state in terminal:
+                stale_ids.append(job_id)
+        if stale_ids:
+            await self.redis.hdel(self.active_key, *stale_ids)
+        return len(stale_ids)

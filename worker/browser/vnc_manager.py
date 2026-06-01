@@ -54,6 +54,20 @@ class VncManager:
         account.vnc_port = vnc_port
         account.mark_updated()
 
+        novnc_port = self.novnc_port_for(account)
+        runtime.novnc = await asyncio.create_subprocess_exec(
+            "websockify",
+            "--web",
+            self.settings.vnc.novnc_web_dir,
+            f"0.0.0.0:{novnc_port}",
+            f"127.0.0.1:{vnc_port}",
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+
+    def novnc_port_for(self, account: Account) -> int:
+        return self.settings.vnc.novnc_start_port + self._numeric_suffix(account.id)
+
     def _display_number(self, account: Account) -> int:
         return self.settings.vnc.display_start + self._numeric_suffix(account.id)
 

@@ -1,0 +1,211 @@
+#cloud-config
+package_update: true
+
+write_files:
+  - path: /usr/local/sbin/install-flow-worker.sh
+    owner: root:root
+    permissions: "0755"
+    content: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+
+      APP_DIR="${app_dir}"
+      REPO_URL="${repo_url}"
+      BRANCH="${repo_branch}"
+      FLOWKIT_REPO="https://github.com/crisng95/flowkit.git"
+      ARCH="$(uname -m)"
+
+      export DEBIAN_FRONTEND=noninteractive
+
+      install_host_deps() {
+        if command -v apt-get >/dev/null 2>&1; then
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates curl gnupg git
+          if ! command -v docker >/dev/null 2>&1; then
+            install -m 0755 -d /etc/apt/keyrings
+            curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+            chmod a+r /etc/apt/keyrings/docker.gpg
+            . /etc/os-release
+            echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $${VERSION_CODENAME} stable" > /etc/apt/sources.list.d/docker.list
+            apt-get update
+            apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+          fi
+        elif command -v dnf >/dev/null 2>&1; then
+          dnf install -y dnf-utils ca-certificates curl git
+          if ! command -v docker >/dev/null 2>&1; then
+            dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
+            dnf install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+          fi
+        else
+          echo "Unsupported Linux distribution: apt-get or dnf required." >&2
+          exit 1
+        fi
+
+        systemctl enable --now docker
+      }
+
+      checkout_repo() {
+        mkdir -p "$${APP_DIR}"
+        if [ -d "$${APP_DIR}/.git" ]; then
+          git -C "$${APP_DIR}" fetch origin "$${BRANCH}"
+          git -C "$${APP_DIR}" checkout "$${BRANCH}"
+          git -C "$${APP_DIR}" pull --ff-only origin "$${BRANCH}"
+        else
+          git clone --branch "$${BRANCH}" "$${REPO_URL}" "$${APP_DIR}"
+        fi
+      }
+
+      patch_for_arm_chromium() {
+        if [ "$${ARCH}" = "x86_64" ]; then
+          return
+        fi
+
+        sed -i 's/chrome_binary: "google-chrome"/chrome_binary: "chromium"/' "$${APP_DIR}/config/worker.yaml"
+        cat > "$${APP_DIR}/docker/Dockerfile" <<'EOF'
+      FROM python:3.11-slim-bookworm
+
+      ENV PYTHONDONTWRITEBYTECODE=1 \
+          PYTHONUNBUFFERED=1 \
+          DEBIAN_FRONTEND=noninteractive
+
+      RUN apt-get update && apt-get install -y --no-install-recommends \
+          ca-certificates \
+          curl \
+          git \
+          gnupg \
+          xvfb \
+          fluxbox \
+          x11vnc \
+          fonts-liberation \
+          libasound2 \
+          libatk-bridge2.0-0 \
+          libatk1.0-0 \
+          libcups2 \
+          libdbus-1-3 \
+          libdrm2 \
+          libgbm1 \
+          libgtk-3-0 \
+          libnspr4 \
+          libnss3 \
+          libxcomposite1 \
+          libxdamage1 \
+          libxfixes3 \
+          libxkbcommon0 \
+          libxrandr2 \
+          xdg-utils \
+          chromium \
+          && ln -sf /usr/bin/chromium /usr/bin/google-chrome \
+          && pip install --no-cache-dir websockify \
+          && git clone --depth 1 https://github.com/novnc/noVNC.git /opt/noVNC \
+          && rm -rf /var/lib/apt/lists/*
+
+      WORKDIR /app
+      COPY requirements.txt /app/requirements.txt
+      RUN pip install --no-cache-dir -r /app/requirements.txt
+
+      COPY worker /app/worker
+      COPY config /worker/config
+
+      RUN mkdir -p /worker/accounts /worker/logs /chrome-profiles /extension
+
+      EXPOSE 8080 5901-5999 9222-9722 12000-12500
+
+      CMD ["uvicorn", "worker.api.main:app", "--host", "0.0.0.0", "--port", "8080", "--workers", "1"]
+      EOF
+      }
+
+      install_flowkit() {
+        mkdir -p "$${APP_DIR}/worker/accounts" "$${APP_DIR}/worker/logs" "$${APP_DIR}/chrome-profiles" "$${APP_DIR}/extension" "$${APP_DIR}/config"
+        if [ ! -f "$${APP_DIR}/extension/manifest.json" ] || ! grep -q '"Flow Kit"' "$${APP_DIR}/extension/manifest.json"; then
+          tmp_flowkit="$(mktemp -d)"
+          git clone --depth 1 "$${FLOWKIT_REPO}" "$${tmp_flowkit}"
+          rm -rf "$${APP_DIR}/extension"
+          mkdir -p "$${APP_DIR}/extension"
+          cp -a "$${tmp_flowkit}/extension/." "$${APP_DIR}/extension/"
+          rm -rf "$${tmp_flowkit}"
+        fi
+      }
+
+      optimize_compose_networking() {
+        cat > "$${APP_DIR}/docker-compose.yml" <<'EOF'
+      services:
+        worker:
+          build:
+            context: .
+            dockerfile: docker/Dockerfile
+          restart: unless-stopped
+          network_mode: host
+          environment:
+            WORKER_CONFIG: /worker/config/worker.yaml
+            REDIS_URL: $${REDIS_URL:?REDIS_URL is required}
+            VNC_PASSWORD: $${VNC_PASSWORD:-}
+          shm_size: "1gb"
+          volumes:
+            - ./config:/worker/config
+            - ./worker/accounts:/worker/accounts
+            - ./worker/logs:/worker/logs
+            - ./chrome-profiles:/chrome-profiles
+            - ./extension:/extension
+      EOF
+      }
+
+      write_env() {
+        cat > "$${APP_DIR}/.env" <<EOF
+      REDIS_URL=${redis_url}
+      ORCHESTRATOR_REDIS_URL=${orchestrator_redis_url}
+      VNC_PASSWORD=${vnc_password}
+      EOF
+      }
+
+      start_worker() {
+        cd "$${APP_DIR}"
+        docker compose build
+        docker compose up -d
+
+        if command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1; then
+          firewall-cmd --permanent --add-port=80/tcp
+          firewall-cmd --permanent --add-port=8080/tcp
+          firewall-cmd --permanent --add-port=6080-6579/tcp
+          firewall-cmd --permanent --add-port=5901-5999/tcp
+          firewall-cmd --permanent --add-port=9222-9722/tcp
+          firewall-cmd --permanent --add-port=12000-12500/tcp
+          firewall-cmd --reload
+        fi
+
+        cat > /etc/systemd/system/flow-worker-compose.service <<EOF
+      [Unit]
+      Description=Flow Worker Appliance Docker Compose
+      Requires=docker.service
+      After=docker.service network-online.target
+      Wants=network-online.target
+
+      [Service]
+      Type=oneshot
+      RemainAfterExit=yes
+      WorkingDirectory=$${APP_DIR}
+      ExecStart=/usr/bin/docker compose up -d
+      ExecStop=/usr/bin/docker compose down
+      TimeoutStartSec=300
+
+      [Install]
+      WantedBy=multi-user.target
+      EOF
+
+        systemctl daemon-reload
+        systemctl enable flow-worker-compose.service
+        systemctl restart flow-worker-compose.service
+      }
+
+      install_host_deps
+      checkout_repo
+      patch_for_arm_chromium
+      install_flowkit
+      optimize_compose_networking
+      write_env
+      start_worker
+
+      echo "Flow Worker Appliance is starting."
+      echo "Health: http://$(hostname -I | awk '{print $1}'):8080/health"
+
+runcmd:
+  - [bash, /usr/local/sbin/install-flow-worker.sh]

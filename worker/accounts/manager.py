@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import HTTPException
+import psutil
 
 from worker.accounts.models import Account, AccountSettings, AccountStatus
 from worker.browser.chrome_manager import ChromeManager
@@ -35,7 +36,8 @@ class AccountManager:
 
     async def load_existing_accounts(self) -> None:
         for account in await self.store.load_all():
-            account.status = AccountStatus.READY
+            if account.status in {AccountStatus.BUSY, AccountStatus.COOLDOWN}:
+                account.status = AccountStatus.READY
             account.jobs_running = 0
             account.browser_pid = None
             account.mark_updated()
@@ -104,6 +106,14 @@ class AccountManager:
     async def start_account(self, account_id: str) -> Account:
         account = self._require(account_id)
         runtime = self.runtime_for(account_id)
+        if self._browser_is_running(account):
+            if runtime.playwright_context is None:
+                await self.chrome.connect(account, runtime)
+            account.status = AccountStatus.READY
+            account.mark_updated()
+            await self.store.save(account)
+            return account
+
         await runtime.terminate()
         if self.settings.flowkit.enabled:
             await self.flowkit.start(account)
@@ -116,10 +126,10 @@ class AccountManager:
     async def stop_account(self, account_id: str) -> Account:
         account = self._require(account_id)
         runtime = self.runtime_for(account_id)
-        await self.chrome.stop(runtime)
+        await runtime.terminate()
         await self.flowkit.stop(account_id)
         account.browser_pid = None
-        account.status = AccountStatus.READY
+        account.status = AccountStatus.STOPPED
         account.mark_updated()
         await self.store.save(account)
         return account
@@ -130,10 +140,24 @@ class AccountManager:
 
     async def recover_account(self, account_id: str, reason: str) -> Account:
         account = self._require(account_id)
+        if not self._browser_is_running(account):
+            logger.warning("starting stopped browser during recovery account=%s reason=%s", account.id, reason)
+            account.status = AccountStatus.BROKEN_SESSION
+            account.health_score = max(0, account.health_score - 5)
+            account.mark_updated()
+            await self.store.save(account)
+            return await self.start_account(account_id)
         runtime = self.runtime_for(account_id)
         await self.recovery.recover(account, runtime, reason)
         await self.store.save(account)
         return account
+
+    async def ensure_account_running(self, account_id: str) -> Account:
+        account = self._require(account_id)
+        if self._browser_is_running(account):
+            return account
+        logger.info("starting browser for scheduled job account=%s", account.id)
+        return await self.start_account(account_id)
 
     async def update_proxy(self, account_id: str, payload: dict[str, Any]) -> Account:
         account = self._require(account_id)
@@ -177,6 +201,12 @@ class AccountManager:
         account.mark_updated()
         await self.store.save(account)
 
+    async def set_account_status(self, account_id: str, status: AccountStatus) -> None:
+        account = self._require(account_id)
+        account.status = status
+        account.mark_updated()
+        await self.store.save(account)
+
     async def shutdown(self) -> None:
         for runtime in list(self._runtimes.values()):
             await runtime.terminate()
@@ -198,3 +228,6 @@ class AccountManager:
         while f"acc-{index}" in self._accounts:
             index += 1
         return f"acc-{index}"
+
+    def _browser_is_running(self, account: Account) -> bool:
+        return bool(account.browser_pid and psutil.pid_exists(account.browser_pid))

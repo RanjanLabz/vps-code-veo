@@ -1,33 +1,43 @@
 services:
-  redis:
-    image: redis:7-alpine
+  orchestrator:
+    build:
+      context: .
+      dockerfile: docker/orchestrator.Dockerfile
     restart: unless-stopped
-    command: ["redis-server", "--appendonly", "yes"]
+    network_mode: host
+    environment:
+      ORCHESTRATOR_CONFIG: /orchestrator/config/orchestrator.yaml
+      ORCHESTRATOR_REDIS_URL: ${ORCHESTRATOR_REDIS_URL:?ORCHESTRATOR_REDIS_URL is required}
+      ORCHESTRATOR_API_KEY: ${ORCHESTRATOR_API_KEY:?ORCHESTRATOR_API_KEY is required}
+      WORKER_API_KEY: ${WORKER_API_KEY:?WORKER_API_KEY is required}
+      ORCHESTRATOR_ALLOW_PUBLIC_HEALTH: ${ORCHESTRATOR_ALLOW_PUBLIC_HEALTH:-true}
+      ORCHESTRATOR_ALLOW_PUBLIC_DOCS: ${ORCHESTRATOR_ALLOW_PUBLIC_DOCS:-false}
+      ORCHESTRATOR_RATE_LIMIT_PER_MINUTE: ${ORCHESTRATOR_RATE_LIMIT_PER_MINUTE:-30}
+      MONGODB_URI: ${MONGODB_URI:?MONGODB_URI is required}
+      MONGODB_DATABASE: ${MONGODB_DATABASE:-flowkit_orchestrator}
+      R2_ENDPOINT_URL: ${R2_ENDPOINT_URL:-}
+      R2_BUCKET: ${R2_BUCKET:-}
+      R2_ACCESS_KEY_ID: ${R2_ACCESS_KEY_ID:-}
+      R2_SECRET_ACCESS_KEY: ${R2_SECRET_ACCESS_KEY:-}
+      R2_PUBLIC_BASE_URL: ${R2_PUBLIC_BASE_URL:-}
     volumes:
-      - redis-data:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 3s
-      retries: 5
+      - ./config:/orchestrator/config
+      - ./orchestrator/logs:/orchestrator/logs
 
   worker:
     build:
       context: .
       dockerfile: docker/Dockerfile
     restart: unless-stopped
-    depends_on:
-      redis:
-        condition: service_healthy
+    network_mode: host
     environment:
       WORKER_CONFIG: /worker/config/worker.yaml
-      REDIS_URL: redis://redis:6379/0
+      WORKER_ID: ${WORKER_ID:-vps-1}
+      REDIS_URL: ${REDIS_URL:?REDIS_URL is required}
+      WORKER_API_KEY: ${WORKER_API_KEY:?WORKER_API_KEY is required}
+      WORKER_ALLOW_PUBLIC_HEALTH: ${WORKER_ALLOW_PUBLIC_HEALTH:-true}
+      WORKER_ALLOW_PUBLIC_DOCS: ${WORKER_ALLOW_PUBLIC_DOCS:-false}
       VNC_PASSWORD: ${VNC_PASSWORD:-}
-    ports:
-      - "${WORKER_API_PORT:-8080}:8080"
-      - "${VNC_PORT_START:-5901}-5999:5901-5999"
-      - "${FLOWKIT_WS_PORT_START:-9222}-9722:9222-9722"
-      - "${CHROME_DEBUG_PORT_START:-12000}-12500:12000-12500"
     shm_size: "1gb"
     volumes:
       - ./config:/worker/config
@@ -35,6 +45,3 @@ services:
       - ./worker/logs:/worker/logs
       - ./chrome-profiles:/chrome-profiles
       - ./extension:/extension
-
-volumes:
-  redis-data:

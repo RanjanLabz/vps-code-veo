@@ -54,6 +54,46 @@ fi
 
 mkdir -p "${APP_DIR}/worker/accounts" "${APP_DIR}/worker/logs" "${APP_DIR}/chrome-profiles" "${APP_DIR}/extension" "${APP_DIR}/config"
 
+if [[ -z "${REDIS_URL:-}" && ! -f "${APP_DIR}/.env" ]]; then
+  echo "REDIS_URL is required because this deployment uses external Redis." >&2
+  echo "Example: REDIS_URL=redis://default:password@host:port ORCHESTRATOR_REDIS_URL=redis://default:password@host:port ./install.sh" >&2
+  exit 1
+fi
+
+if [[ -z "${MONGODB_URI:-}" && ! -f "${APP_DIR}/.env" ]]; then
+  echo "MONGODB_URI is required because this deployment uses MongoDB for orchestrator state." >&2
+  exit 1
+fi
+
+if [[ -n "${REDIS_URL:-}" ]]; then
+  ORCHESTRATOR_API_KEY="${ORCHESTRATOR_API_KEY:-$(openssl rand -hex 32)}"
+  WORKER_API_KEY="${WORKER_API_KEY:-$(openssl rand -hex 32)}"
+  cat > "${APP_DIR}/.env" <<EOF
+REDIS_URL=${REDIS_URL}
+ORCHESTRATOR_REDIS_URL=${ORCHESTRATOR_REDIS_URL:-${REDIS_URL}}
+MONGODB_URI=${MONGODB_URI:-}
+MONGODB_DATABASE=${MONGODB_DATABASE:-flowkit_orchestrator}
+R2_ENDPOINT_URL=${R2_ENDPOINT_URL:-}
+R2_BUCKET=${R2_BUCKET:-flowkit-generated-media}
+R2_ACCESS_KEY_ID=${R2_ACCESS_KEY_ID:-}
+R2_SECRET_ACCESS_KEY=${R2_SECRET_ACCESS_KEY:-}
+R2_PUBLIC_BASE_URL=${R2_PUBLIC_BASE_URL:-}
+ORCHESTRATOR_API_KEY=${ORCHESTRATOR_API_KEY:-}
+ORCHESTRATOR_URL=${ORCHESTRATOR_URL:-}
+WORKER_API_KEY=${WORKER_API_KEY:-}
+WORKER_ID=${WORKER_ID:-vps-1}
+WORKER_PUBLIC_URL=${WORKER_PUBLIC_URL:-}
+WORKER_MAX_JOBS=${WORKER_MAX_JOBS:-10}
+WORKER_WEIGHT=${WORKER_WEIGHT:-100}
+ORCHESTRATOR_ALLOW_PUBLIC_HEALTH=${ORCHESTRATOR_ALLOW_PUBLIC_HEALTH:-true}
+ORCHESTRATOR_ALLOW_PUBLIC_DOCS=${ORCHESTRATOR_ALLOW_PUBLIC_DOCS:-false}
+ORCHESTRATOR_RATE_LIMIT_PER_MINUTE=${ORCHESTRATOR_RATE_LIMIT_PER_MINUTE:-30}
+WORKER_ALLOW_PUBLIC_HEALTH=${WORKER_ALLOW_PUBLIC_HEALTH:-true}
+WORKER_ALLOW_PUBLIC_DOCS=${WORKER_ALLOW_PUBLIC_DOCS:-false}
+VNC_PASSWORD=${VNC_PASSWORD:-}
+EOF
+fi
+
 if [[ ! -f "${APP_DIR}/extension/manifest.json" ]] || ! grep -q '"Flow Kit"' "${APP_DIR}/extension/manifest.json"; then
   tmp_flowkit="$(mktemp -d)"
   git clone --depth 1 "${FLOWKIT_REPO}" "${tmp_flowkit}"
@@ -90,6 +130,8 @@ EOF
 ${SUDO} systemctl daemon-reload
 ${SUDO} systemctl enable flow-worker-compose.service
 ${SUDO} systemctl restart flow-worker-compose.service
+
+bash "${APP_DIR}/scripts/register-worker.sh" || true
 
 echo "Flow Worker Appliance is starting."
 echo "App dir: ${APP_DIR}"

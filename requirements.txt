@@ -6,3 +6,6 @@ pydantic==2.10.4
 PyYAML==6.0.2
 psutil==6.1.1
 websockets==14.1
+httpx==0.28.1
+asyncpg==0.30.0
+motor==3.7.1

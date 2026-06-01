@@ -11,6 +11,7 @@ class AccountRuntime:
     xvfb: asyncio.subprocess.Process | None = None
     fluxbox: asyncio.subprocess.Process | None = None
     x11vnc: asyncio.subprocess.Process | None = None
+    novnc: asyncio.subprocess.Process | None = None
     chrome: asyncio.subprocess.Process | None = None
     playwright_browser: Browser | None = None
     playwright_context: BrowserContext | None = None
@@ -25,7 +26,7 @@ class AccountRuntime:
         self.playwright_context = None
         self.playwright_browser = None
 
-        for process in [self.chrome, self.x11vnc, self.fluxbox, self.xvfb]:
+        for process in [self.chrome, self.novnc, self.x11vnc, self.fluxbox, self.xvfb]:
             if process is not None and process.returncode is None:
                 process.terminate()
                 try:
@@ -34,6 +35,7 @@ class AccountRuntime:
                     process.kill()
                     await process.wait()
         self.chrome = None
+        self.novnc = None
         self.x11vnc = None
         self.fluxbox = None
         self.xvfb = None

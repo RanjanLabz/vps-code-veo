@@ -1,7 +1,7 @@
 worker_id: "vps-worker-1"
 api_port: 8080
-redis_url: "redis://redis:6379/0"
-autostart_accounts: true
+redis_url: "${REDIS_URL}"
+autostart_accounts: false
 
 paths:
   base_dir: "/opt/flow-worker"
@@ -20,12 +20,22 @@ browser:
   navigation_timeout_ms: 60000
   extra_args:
     - "--no-sandbox"
+    - "--disable-gpu"
+    - "--disable-software-rasterizer"
+    - "--disable-gpu-compositing"
+    - "--disable-gpu-rasterization"
+    - "--disable-accelerated-2d-canvas"
+    - "--disable-accelerated-video-decode"
+    - "--disable-background-timer-throttling"
+    - "--disable-renderer-backgrounding"
 
 vnc:
   display_start: 100
   vnc_start_port: 5901
-  width: 1440
-  height: 1000
+  novnc_start_port: 6080
+  novnc_web_dir: "/opt/noVNC"
+  width: 1280
+  height: 720
   depth: 24
   password: null
 
@@ -45,3 +55,23 @@ flowkit:
   enabled: true
   ws_host: "127.0.0.1"
   ws_start_port: 9222
+
+flow_settings:
+  text_to_image:
+    model: "nano-banana-2"
+    estimated_credits: 20
+    presets: {}
+  image_to_image:
+    model: "nano-banana-2-edit"
+    estimated_credits: 25
+    presets: {}
+  text_to_video:
+    model: "veo-3.1-fast"
+    duration: 8
+    estimated_credits: 160
+    presets: {}
+  image_to_video:
+    model: "veo-3.1-quality"
+    duration: 8
+    estimated_credits: 300
+    presets: {}

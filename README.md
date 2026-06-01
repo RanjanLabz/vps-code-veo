@@ -1,6 +1,6 @@
-# Flow Worker Appliance
+# Distributed Flow Orchestration Platform
 
-Production-oriented VPS worker for running multiple isolated Google Flow / FlowKit browser accounts on one Ubuntu host.
+Production-oriented Google Flow / FlowKit orchestration system with a global FastAPI orchestrator, external Redis-backed queues, MongoDB state store, Cloudflare R2 media storage, and multi-account VPS worker nodes.
 
 ## What It Provides
 
@@ -9,10 +9,33 @@ Production-oriented VPS worker for running multiple isolated Google Flow / FlowK
 - Per-account x11vnc debug ports.
 - Optional per-account proxy.
 - FlowKit-compatible Chrome extension bridge per account.
+- Runtime global Flow model/duration/credit configuration shared by all accounts.
 - Redis-backed job queue with active, delayed, retry, and completed job state.
 - FastAPI account and job management API.
 - Recovery engine for reconnecting Playwright, clearing `labs.google` storage, refreshing Flow, and restarting Chrome.
-- Docker Compose deployment with Redis and auto-start on reboot.
+- Docker Compose deployment with external Redis and auto-start on reboot.
+- Global orchestrator API on port `8090`.
+- Global capacity manager that selects the healthiest VPS worker.
+- MongoDB collections for jobs, workers, accounts, settings, logs, and metrics.
+- Cloudflare R2 bucket configuration for generated media storage.
+- Next.js internal admin/testing panel under `frontend/`.
+
+## Repository Layout
+
+This working tree contains the full platform for local development:
+
+- `orchestrator/`: global FastAPI scheduler, global queue, worker registry, capacity logic.
+- `worker/`: VPS browser appliance API, account manager, Chrome/VNC/FlowKit bridge, local queue.
+- `extension/`: FlowKit-compatible Chrome extension loaded into each account profile.
+- `frontend/`: admin/testing UI.
+- `config/`: default YAML only. Runtime worker/VPS records are stored in the database.
+- `docker/`, `docker-compose*.yml`: local/VPS container entrypoints.
+- `scripts/`: install/update/registration helpers.
+- `terraform/`: optional Oracle provisioning. Terraform state should stay local and is gitignored.
+
+Separate deployment repos can contain only the relevant subset. For example,
+`flowkit-global-orchestrator` should contain only `orchestrator/`, its config,
+Render Dockerfile, requirements, and deployment metadata.
 
 ## Quick Install
 
@@ -20,6 +43,19 @@ On a fresh Ubuntu 22.04+ VPS:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/<owner>/<repo>/main/install.sh | REPO_URL=https://github.com/<owner>/<repo>.git bash
+```
+
+External Redis is required:
+
+```bash
+export REDIS_URL="redis://default:password@host:port"
+export ORCHESTRATOR_REDIS_URL="$REDIS_URL"
+export MONGODB_URI="mongodb+srv://user:password@cluster.mongodb.net/?appName=FlowAPI"
+export MONGODB_DATABASE="flowkit_orchestrator"
+export R2_ENDPOINT_URL="https://account-id.r2.cloudflarestorage.com"
+export R2_BUCKET="flowkit-generated-media"
+export R2_ACCESS_KEY_ID="..."
+export R2_SECRET_ACCESS_KEY="..."
 ```
 
 For a local checkout on the VPS:
@@ -39,7 +75,19 @@ The installer installs Docker and Chrome, creates persistent directories, builds
 curl -fsSL https://raw.githubusercontent.com/<owner>/<repo>/main/install.sh | REPO_URL=https://github.com/<owner>/<repo>.git bash
 ```
 
-This clones the repo into `/opt/flow-worker`, installs Docker and Chrome, starts Redis and the worker, and enables auto-start on reboot.
+This clones the repo into `/opt/flow-worker`, installs Docker and Chrome, starts the orchestrator and the worker, and enables auto-start on reboot. Redis, MongoDB, and R2 are expected to be cloud/external services supplied through `.env` or environment variables.
+
+To auto-register the VPS with a remote orchestrator during install, pass:
+
+```bash
+ORCHESTRATOR_URL="https://flowkit-global-orchestrator.onrender.com" \
+ORCHESTRATOR_API_KEY="..." \
+WORKER_ID="vps-1" \
+WORKER_PUBLIC_URL="http://YOUR_ORACLE_PUBLIC_IP:8080" \
+curl -fsSL https://raw.githubusercontent.com/<owner>/<repo>/main/install.sh | REPO_URL=https://github.com/<owner>/<repo>.git bash
+```
+
+If `WORKER_PUBLIC_URL` is omitted, the installer attempts to detect the public IP.
 
 To update an existing VPS:
 
@@ -50,7 +98,8 @@ sudo bash ./scripts/update.sh
 
 ## Runtime Ports
 
-- API: `8080`
+- Orchestrator API: `8090`
+- Worker API: `8080`
 - VNC accounts: `5901-5999`
 - Chrome remote debugging inside container: `9222-9322`
 
@@ -80,10 +129,75 @@ curl -X POST http://localhost:8080/jobs \
   -d '{"prompt":"Create a short cinematic clip of a city at sunrise"}'
 ```
 
+Read global Flow settings from the orchestrator:
+
+```bash
+curl http://localhost:8090/flow-settings
+```
+
+Update the universal model/cost used by all accounts:
+
+```bash
+curl -X PATCH http://localhost:8090/flow-settings \
+  -H 'content-type: application/json' \
+  -d '{
+    "text_to_video": {
+      "model": "veo-3.1-fast",
+      "duration": 8,
+      "estimated_credits": 160
+    }
+  }'
+```
+
+Submit a generation request using the global settings:
+
+```bash
+curl -X POST http://localhost:8090/generate/text-to-video \
+  -H 'content-type: application/json' \
+  -d '{"prompt":"cinematic Tokyo rain street"}'
+```
+
+Register another VPS worker with the orchestrator:
+
+```bash
+curl -X POST http://localhost:8090/workers \
+  -H 'content-type: application/json' \
+  -d '{"id":"vps-2","base_url":"http://10.0.0.20:8080","max_jobs":10}'
+```
+
+Worker URLs are persisted in MongoDB/PostgreSQL through the orchestrator API. They
+are no longer written back into YAML. If Oracle changes a VPS IP, update the
+worker record instead of editing environment variables:
+
+```bash
+curl -X POST https://flowkit-global-orchestrator.onrender.com/workers \
+  -H 'content-type: application/json' \
+  -H 'x-api-key: <orchestrator-api-key>' \
+  -d '{"id":"vps-1","base_url":"http://NEW_ORACLE_IP:8080","enabled":true,"max_jobs":10,"weight":100}'
+```
+
+Remove a VPS from scheduling:
+
+```bash
+curl -X DELETE https://flowkit-global-orchestrator.onrender.com/workers/vps-1 \
+  -H 'x-api-key: <orchestrator-api-key>'
+```
+
+Or run the helper from a VPS:
+
+```bash
+cd /opt/flow-worker
+ORCHESTRATOR_URL="https://flowkit-global-orchestrator.onrender.com" \
+ORCHESTRATOR_API_KEY="..." \
+WORKER_PUBLIC_URL="http://NEW_ORACLE_IP:8080" \
+bash scripts/register-worker.sh
+```
+
 Check health:
 
 ```bash
 curl http://localhost:8080/health
+curl http://localhost:8090/health
 ```
 
 ## Account States
@@ -96,7 +210,7 @@ curl http://localhost:8080/health
 
 ## Configuration
 
-Edit `config/worker.yaml` or override key values with environment variables:
+Edit `config/worker.yaml` or override worker-local values with environment variables:
 
 - `WORKER_ID`
 - `REDIS_URL`
@@ -105,6 +219,51 @@ Edit `config/worker.yaml` or override key values with environment variables:
 - `FLOW_URL`
 - `VNC_PASSWORD`
 - `autostart_accounts` in YAML controls whether persisted accounts relaunch after container restart.
+- `flow_settings` in YAML controls the global model, duration, estimated credits, and presets for `text_to_image`, `image_to_image`, `text_to_video`, and `image_to_video`.
+
+Flow model selection is global by design. Accounts are execution workers only; they do not choose models.
+
+VPS worker records are database state, not file state. The orchestrator loads
+registered workers from MongoDB/PostgreSQL first. YAML/env `workers` or
+`WORKER_BASE_URL` are only bootstrap seeds for first install.
+
+## Distributed Architecture
+
+Incoming generation requests go to the global orchestrator first. The orchestrator stores the job in Redis, reads global Flow settings, evaluates every registered VPS worker, and dispatches to the healthiest worker with capacity. The worker then queues locally and selects the best eligible account.
+
+If the admin testing panel specifies a VPS, account, model, duration, or preset override, that override applies only to that test job and does not change production defaults.
+
+The normal production API path does not require users to choose a VPS or account:
+
+```bash
+curl -X POST http://localhost:8090/generate/text-to-video \
+  -H 'content-type: application/json' \
+  -d '{"prompt":"cinematic Tokyo rain street"}'
+```
+
+The global scheduler checks free account slots across all enabled VPS workers. If every account on every VPS is busy, the job stays in the global Redis queue and is retried until capacity opens.
+
+## Separate Orchestrator VPS
+
+For larger deployments, run the queue/orchestrator on its own VPS and register worker VPS nodes by URL:
+
+```bash
+docker compose -f docker-compose.orchestrator.yml up -d --build
+```
+
+Use cloud Redis by setting `ORCHESTRATOR_REDIS_URL`. Worker VPS nodes use `REDIS_URL` for their local queue namespace. Worker VPS nodes only need the worker API on `:8080`; the orchestrator can be hosted separately from browser/account machines.
+
+## Admin Testing Panel
+
+The distributed testing panel lives in `frontend/` and talks to the orchestrator through `/api/orchestrator`.
+
+```bash
+cd frontend
+npm install
+npm run dev -- --port 3001
+```
+
+Open `http://localhost:3001`.
 
 ## Persistent Data
 

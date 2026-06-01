@@ -23,5 +23,7 @@ git pull --ff-only origin "${BRANCH}"
 ${SUDO} docker compose build
 ${SUDO} docker compose up -d
 
+bash "${APP_DIR}/scripts/register-worker.sh" || true
+
 echo "Flow Worker Appliance updated."
 echo "Health: http://$(hostname -I | awk '{print $1}'):8080/health"

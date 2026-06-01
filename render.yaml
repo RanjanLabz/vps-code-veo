@@ -1,0 +1,39 @@
+services:
+  - type: web
+    name: flowkit-global-orchestrator
+    runtime: docker
+    plan: starter
+    dockerfilePath: ./docker/Dockerfile
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: ORCHESTRATOR_CONFIG
+        value: config/orchestrator.yaml
+      - key: ORCHESTRATOR_LOGS_DIR
+        value: /tmp/orchestrator/logs
+      - key: ORCHESTRATOR_ALLOW_PUBLIC_HEALTH
+        value: "true"
+      - key: ORCHESTRATOR_ALLOW_PUBLIC_DOCS
+        value: "false"
+      - key: ORCHESTRATOR_RATE_LIMIT_PER_MINUTE
+        value: "30"
+      - key: ORCHESTRATOR_REDIS_URL
+        sync: false
+      - key: ORCHESTRATOR_API_KEY
+        sync: false
+      - key: WORKER_API_KEY
+        sync: false
+      - key: MONGODB_URI
+        sync: false
+      - key: MONGODB_DATABASE
+        value: flowkit_orchestrator
+      - key: R2_ENDPOINT_URL
+        sync: false
+      - key: R2_BUCKET
+        value: flowkit-generated-media
+      - key: R2_ACCESS_KEY_ID
+        sync: false
+      - key: R2_SECRET_ACCESS_KEY
+        sync: false
+      - key: R2_PUBLIC_BASE_URL
+        sync: false

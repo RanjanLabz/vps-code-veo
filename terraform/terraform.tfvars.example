@@ -1,0 +1,30 @@
+tenancy_ocid      = "ocid1.tenancy.oc1..replace_me"
+compartment_ocid  = "ocid1.compartment.oc1..replace_me"
+ssh_public_key_path = "~/.ssh/id_rsa.pub"
+
+# Uses ~/.oci/config [DEFAULT] by default.
+config_file_profile = "DEFAULT"
+
+# If you do not want to use ~/.oci/config, set config_file_profile = null
+# and uncomment these direct provider credentials:
+# user_ocid        = "ocid1.user.oc1..replace_me"
+# fingerprint      = "00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00"
+# private_key_path = "~/.oci/oci_api_key.pem"
+# region           = "us-ashburn-1"
+
+# Keep the default x86_64 shape because this app installs amd64 Google Chrome.
+instance_shape     = "VM.Standard.E4.Flex"
+instance_ocpus     = 2
+instance_memory_gb = 16
+
+# Lock these down to your own IP/CIDR before production use.
+ssh_allowed_cidr = "0.0.0.0/0"
+api_allowed_cidr = "0.0.0.0/0"
+
+# Leave VNC closed publicly unless you need direct VNC access.
+# Example: vnc_allowed_cidr = "203.0.113.10/32"
+vnc_allowed_cidr = ""
+vnc_password     = ""
+
+# External Redis is required. Use rediss:// if your provider requires TLS.
+redis_url = "redis://default:replace_me@host:port"

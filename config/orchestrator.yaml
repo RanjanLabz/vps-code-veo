@@ -1,0 +1,43 @@
+orchestrator_id: "global-orchestrator-1"
+api_host: "0.0.0.0"
+api_port: 8090
+redis_url: "${ORCHESTRATOR_REDIS_URL}"
+mongodb_uri: "${MONGODB_URI}"
+mongodb_database: "flowkit_orchestrator"
+
+queue:
+  name: "flow_global_jobs"
+  max_retries: 3
+  retry_delay_seconds: 60
+  scheduler_interval_seconds: 1.0
+  status_sync_interval_seconds: 5.0
+  dispatch_timeout_seconds: 30
+
+workers: []
+
+flow_settings:
+  text_to_image:
+    model: "nano-banana-2"
+    estimated_credits: 20
+    presets: {}
+  image_to_image:
+    model: "nano-banana-2-edit"
+    estimated_credits: 25
+    presets: {}
+  text_to_video:
+    model: "veo-3.1-fast"
+    duration: 8
+    estimated_credits: 160
+    presets: {}
+  image_to_video:
+    model: "veo-3.1-quality"
+    duration: 8
+    estimated_credits: 300
+    presets: {}
+
+storage:
+  r2_endpoint_url: "${R2_ENDPOINT_URL}"
+  r2_bucket: "${R2_BUCKET}"
+  r2_access_key_id: "${R2_ACCESS_KEY_ID}"
+  r2_secret_access_key: "${R2_SECRET_ACCESS_KEY}"
+  r2_public_base_url: "${R2_PUBLIC_BASE_URL}"

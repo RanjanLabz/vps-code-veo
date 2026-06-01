@@ -9,3 +9,16 @@ chrome-profiles/*
 worker/accounts/*.yaml
 worker/logs/*.log
 worker/logs/*.log.*
+worker/logs/videos/
+terraform/.terraform/
+terraform/*.tfstate
+terraform/*.tfstate.*
+terraform/tfplan
+*.tfplan
+*.log
+dev.log
+dev.err.log
+node_modules/
+flowkit-source/
+*.pem
+terraform/terraform.tfvars
