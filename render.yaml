@@ -3,12 +3,12 @@ services:
     name: flowkit-global-orchestrator
     runtime: docker
     plan: starter
-    dockerfilePath: ./docker/Dockerfile
+    dockerfilePath: ./docker/orchestrator.Dockerfile
     healthCheckPath: /health
     autoDeploy: true
     envVars:
       - key: ORCHESTRATOR_CONFIG
-        value: config/orchestrator.yaml
+        value: /orchestrator/config/orchestrator.yaml
       - key: ORCHESTRATOR_LOGS_DIR
         value: /tmp/orchestrator/logs
       - key: ORCHESTRATOR_ALLOW_PUBLIC_HEALTH
