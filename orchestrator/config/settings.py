@@ -143,8 +143,6 @@ def load_settings() -> Settings:
         env["security"] = security_env
     if os.getenv("ORCHESTRATOR_API_PORT"):
         env["api_port"] = int(os.environ["ORCHESTRATOR_API_PORT"])
-    if os.getenv("WORKER_BASE_URL"):
-        env["workers"] = [{"id": os.getenv("WORKER_ID", "vps-1"), "base_url": os.environ["WORKER_BASE_URL"]}]
     return Settings.model_validate(_deep_merge(data, env))
 
 
