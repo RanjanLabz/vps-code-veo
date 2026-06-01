@@ -47,11 +47,16 @@ class GlobalQueue:
 
     async def list_jobs(self, limit: int = 100) -> list[GlobalJob]:
         assert self.redis is not None
-        ids = await self.redis.zrevrange(self.job_ids_key, 0, limit - 1)
+        recent_ids = await self.redis.zrevrange(self.job_ids_key, 0, limit - 1)
+        active_ids = await self.redis.hkeys(self.active_key)
+        ids = list(dict.fromkeys([*active_ids, *recent_ids]))
         if not ids:
             return []
         raw_jobs = await self.redis.hmget(self.jobs_key, ids)
-        return [GlobalJob.model_validate_json(raw) for raw in raw_jobs if raw]
+        jobs = [GlobalJob.model_validate_json(raw) for raw in raw_jobs if raw]
+        active_states = {JobState.QUEUED, JobState.ASSIGNED, JobState.PROCESSING, JobState.RETRYING}
+        jobs.sort(key=lambda job: (job.state in active_states, job.created_at), reverse=True)
+        return jobs[:limit]
 
     async def pop_ready(self) -> GlobalJob | None:
         assert self.redis is not None
