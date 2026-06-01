@@ -248,14 +248,22 @@ function keepAlive() {
   }
 }
 
+const CALLBACK_URL = 'http://127.0.0.1:8100/api/ext/callback';
+
 function sendToAgent(msg) {
   // API responses (with msg.id) go via HTTP — immune to WS disconnect
   if (msg.id) {
-    fetch('http://127.0.0.1:8100/api/ext/callback', {
+    fetch(CALLBACK_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(msg),
-    }).catch(() => {
+    }).then((resp) => {
+      if (!resp.ok) {
+        console.warn('[FlowAgent] callback HTTP returned', resp.status, 'falling back to WS');
+        if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
+      }
+    }).catch((error) => {
+      console.warn('[FlowAgent] callback HTTP failed, falling back to WS:', error);
       // HTTP failed — fallback to WS
       if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
     });

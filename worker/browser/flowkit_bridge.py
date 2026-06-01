@@ -63,17 +63,29 @@ class FlowKitBridge:
     async def send(self, account_id: str, method: str, params: dict[str, Any], timeout: float = 300) -> dict[str, Any]:
         websocket = self._connections.get(account_id)
         if websocket is None:
+            logger.warning("FlowKit send blocked account=%s method=%s reason=extension-not-connected", account_id, method)
             return {"error": "Extension not connected"}
         request_id = str(uuid4())
         future = asyncio.get_running_loop().create_future()
         self._pending.setdefault(account_id, {})[request_id] = future
         try:
+            logger.info("FlowKit send account=%s method=%s request_id=%s timeout=%ss", account_id, method, request_id, timeout)
             await websocket.send(json.dumps({"id": request_id, "method": method, "params": params}))
             result = await asyncio.wait_for(future, timeout=timeout)
+            logger.info("FlowKit response account=%s method=%s request_id=%s keys=%s", account_id, method, request_id, sorted(result.keys()))
             return dict(result)
         except asyncio.TimeoutError:
+            logger.warning(
+                "FlowKit timeout account=%s method=%s request_id=%s pending=%s connected=%s",
+                account_id,
+                method,
+                request_id,
+                len(self._pending.get(account_id, {})),
+                account_id in self._connections,
+            )
             return {"error": f"Timeout ({timeout}s) waiting for {method}"}
         except Exception as exc:
+            logger.exception("FlowKit send failed account=%s method=%s request_id=%s", account_id, method, request_id)
             return {"error": str(exc)}
         finally:
             self._pending.get(account_id, {}).pop(request_id, None)
@@ -82,8 +94,10 @@ class FlowKitBridge:
         request_id = payload.get("id")
         future = self._pending.get(account_id, {}).get(request_id)
         if future is not None and not future.done():
+            logger.info("FlowKit callback matched account=%s request_id=%s keys=%s", account_id, request_id, sorted(payload.keys()))
             future.set_result(payload)
             return {"ok": True}
+        logger.warning("FlowKit callback unmatched account=%s request_id=%s pending=%s", account_id, request_id, list(self._pending.get(account_id, {}).keys()))
         return {"ok": False, "reason": "no matching pending request"}
 
     def status(self, account_id: str) -> dict[str, Any]:
@@ -112,6 +126,7 @@ class FlowKitBridge:
             text = text.replace("ws://127.0.0.1:9222", ws_url)
             text = text.replace("http://127.0.0.1:8100/api/ext/callback", callback_url)
             background.write_text(text, encoding="utf-8")
+            logger.info("Prepared FlowKit extension account=%s ws=%s callback=%s path=%s", account.id, ws_url, callback_url, target)
         self._patch_manifest_permissions(target / "manifest.json")
         account.extension_runtime_path = str(target)
         account.mark_updated()
