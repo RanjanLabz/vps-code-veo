@@ -86,28 +86,58 @@ def create_project_request(title: str) -> dict[str, Any]:
     }
 
 
-def generate_image_request(prompt: str, project_id: str, model: str | None = None, aspect_ratio: str = "16:9") -> dict[str, Any]:
+def generate_image_request(
+    prompt: str,
+    project_id: str,
+    model: str | None = None,
+    aspect_ratio: str = "16:9",
+    base_image_media_id: str | None = None,
+) -> dict[str, Any]:
     ts = int(time.time() * 1000)
     ctx = client_context(project_id)
     image_model = IMAGE_MODELS.get(model or "", "NARWHAL")
-    body = {
-        "clientContext": ctx,
-        "requests": [
-            {
-                "clientContext": {**ctx, "sessionId": f";{ts}"},
-                "seed": ts % 1000000,
-                "structuredPrompt": {"parts": [{"text": prompt}]},
-                "imageAspectRatio": IMAGE_ASPECT_RATIOS.get(aspect_ratio, "IMAGE_ASPECT_RATIO_LANDSCAPE"),
-                "imageModelName": image_model,
-            }
-        ],
+    request_item: dict[str, Any] = {
+        "clientContext": {**ctx, "sessionId": f";{ts}"},
+        "seed": ts % 1000000,
+        "structuredPrompt": {"parts": [{"text": prompt}]},
+        "imageAspectRatio": IMAGE_ASPECT_RATIOS.get(aspect_ratio, "IMAGE_ASPECT_RATIO_LANDSCAPE"),
+        "imageModelName": image_model,
     }
+    body: dict[str, Any] = {
+        "clientContext": ctx,
+        "requests": [request_item],
+    }
+    if base_image_media_id:
+        request_item["imageInputs"] = [
+            {"name": base_image_media_id, "imageInputType": "IMAGE_INPUT_TYPE_BASE_IMAGE"}
+        ]
+        body["mediaGenerationContext"] = {"batchId": str(uuid.uuid4())}
+        body["useNewMedia"] = True
     return {
         "url": f"{GOOGLE_FLOW_API}/v1/projects/{project_id}/flowMedia:batchGenerateImages?key={GOOGLE_API_KEY}",
         "method": "POST",
         "headers": browser_headers(),
         "body": body,
         "captchaAction": "IMAGE_GENERATION",
+    }
+
+
+def upload_image_request(image_base64: str, project_id: str, mime_type: str = "image/png", file_name: str = "input.png") -> dict[str, Any]:
+    return {
+        "url": f"{GOOGLE_FLOW_API}/v1/flow/uploadImage?key={GOOGLE_API_KEY}",
+        "method": "POST",
+        "headers": browser_headers(),
+        "body": {
+            "clientContext": {
+                "projectId": project_id,
+                "tool": "PINHOLE",
+            },
+            "fileName": file_name,
+            "imageBytes": image_base64,
+            "isHidden": False,
+            "isUserUploaded": True,
+            "mimeType": mime_type,
+        },
     }
 
 

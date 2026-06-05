@@ -3,13 +3,17 @@ from __future__ import annotations
 import asyncio
 import base64
 import logging
+import mimetypes
 import re
 from datetime import datetime, timezone
 from typing import Any
+from urllib.parse import urlparse
+
+import httpx
 
 from worker.accounts.manager import AccountManager
 from worker.accounts.models import Account, AccountStatus
-from worker.browser.flowkit_requests import create_project_request, generate_image_request, generate_video_request, get_media_request
+from worker.browser.flowkit_requests import create_project_request, generate_image_request, generate_video_request, get_media_request, upload_image_request
 from worker.config.settings import Settings
 from worker.queue.models import Job, JobState
 
@@ -130,18 +134,19 @@ class JobExecutor:
             raise RuntimeError(f"FlowKit create project did not return project id: {project_result}")
 
         inputs = job.payload.get("inputs") if isinstance(job.payload.get("inputs"), dict) else {}
-        image_media_id = str(inputs.get("image_media_id") or "").strip() or None
+        input_image_media_id = await self._resolve_input_image_media_id(job, account, project_id, inputs)
+        image_media_id = input_image_media_id
         image_result: dict[str, Any] | None = None
         output_urls: list[str] = []
         if job.generation_type == "image_to_video" and image_media_id:
             job.stamp("input_image_media_id_used")
         else:
-            if job.generation_type in {"image_to_image", "image_to_video"} and not (inputs.get("image_url") or inputs.get("image_data_url") or image_media_id):
+            if job.generation_type in {"image_to_image", "image_to_video"} and not image_media_id:
                 raise RuntimeError("Image input missing: send inputs.image_url, inputs.image_data_url, or inputs.image_media_id.")
             image_result = await self.accounts.flowkit.send(
                 account.id,
                 "api_request",
-                generate_image_request(generation_prompt, project_id, job.flow_model, job.aspect_ratio),
+                generate_image_request(generation_prompt, project_id, job.flow_model, job.aspect_ratio, image_media_id if job.generation_type == "image_to_image" else None),
                 timeout=90,
             )
             if image_result.get("error") or int(image_result.get("status") or 200) >= 400:
@@ -179,6 +184,8 @@ class JobExecutor:
                 "project_id": project_id,
                 "image_media_id": image_media_id,
                 "video_media_id": video_media_id,
+                "input_image_media_id": input_image_media_id,
+                "input_image_used": bool(input_image_media_id),
                 "aspect_ratio": job.aspect_ratio,
                 "caption": job.caption,
                 "image_result": image_result,
@@ -189,11 +196,90 @@ class JobExecutor:
         return {
             "project_id": project_id,
             "image_media_id": image_media_id,
+            "input_image_media_id": input_image_media_id,
+            "input_image_used": bool(input_image_media_id),
             "aspect_ratio": job.aspect_ratio,
             "caption": job.caption,
             "image_result": image_result,
             "output_urls": sorted(set(output_urls)),
         }
+
+    async def _resolve_input_image_media_id(self, job: Job, account: Account, project_id: str, inputs: dict[str, Any]) -> str | None:
+        media_id = str(inputs.get("image_media_id") or "").strip()
+        if media_id:
+            job.stamp("input_image_media_id_provided")
+            return media_id
+        if job.generation_type not in {"image_to_image", "image_to_video"}:
+            return None
+        image_payload = await self._read_input_image(inputs)
+        if image_payload is None:
+            return None
+        image_base64, mime_type, file_name = image_payload
+        job.stamp("input_image_upload_started")
+        upload_result = await self.accounts.flowkit.send(
+            account.id,
+            "api_request",
+            upload_image_request(image_base64, project_id, mime_type=mime_type, file_name=file_name),
+            timeout=90,
+        )
+        if upload_result.get("error") or int(upload_result.get("status") or 200) >= 400:
+            raise RuntimeError(f"FlowKit input image upload failed: {upload_result}")
+        uploaded_media_id = self._extract_uploaded_media_id(upload_result)
+        if not uploaded_media_id:
+            raise RuntimeError(f"FlowKit input image upload did not return media id: {upload_result}")
+        job.payload["input_image_upload_result"] = self._redact_image_bytes(upload_result)
+        job.payload["input_image_media_id"] = uploaded_media_id
+        job.stamp("input_image_upload_finished")
+        return uploaded_media_id
+
+    async def _read_input_image(self, inputs: dict[str, Any]) -> tuple[str, str, str] | None:
+        data_url = str(inputs.get("image_data_url") or "").strip()
+        if data_url:
+            match = re.match(r"^data:(image/[a-zA-Z0-9.+-]+);base64,(.+)$", data_url, re.S)
+            if not match:
+                raise RuntimeError("inputs.image_data_url must be a base64 data URL like data:image/png;base64,...")
+            return match.group(2), match.group(1), "uploaded-image." + (match.group(1).split("/")[-1] or "png")
+        image_url = str(inputs.get("image_url") or "").strip()
+        if not image_url:
+            return None
+        parsed = urlparse(image_url)
+        if parsed.scheme != "https":
+            raise RuntimeError("inputs.image_url must be an HTTPS URL")
+        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+            response = await client.get(image_url)
+            response.raise_for_status()
+        content_type = response.headers.get("content-type", "").split(";")[0].strip().lower()
+        if not content_type.startswith("image/"):
+            content_type = mimetypes.guess_type(parsed.path)[0] or "image/png"
+        suffix = mimetypes.guess_extension(content_type) or ".png"
+        file_name = parsed.path.rsplit("/", 1)[-1] or f"input{suffix}"
+        return base64.b64encode(response.content).decode(), content_type, file_name
+
+    def _extract_uploaded_media_id(self, payload: dict[str, Any]) -> str | None:
+        data = payload.get("data") if isinstance(payload.get("data"), dict) else payload
+        if isinstance(data, dict):
+            media = data.get("media")
+            if isinstance(media, dict) and media.get("name"):
+                return str(media["name"])
+            media_id = data.get("mediaId")
+            if isinstance(media_id, dict) and media_id.get("mediaId"):
+                return str(media_id["mediaId"])
+            if isinstance(data.get("_mediaId"), str):
+                return str(data["_mediaId"])
+        return self._extract_media_id(payload)
+
+    def _redact_image_bytes(self, value: object) -> object:
+        if isinstance(value, dict):
+            redacted: dict[str, Any] = {}
+            for key, child in value.items():
+                if key == "imageBytes":
+                    redacted[key] = "<redacted>"
+                else:
+                    redacted[key] = self._redact_image_bytes(child)
+            return redacted
+        if isinstance(value, list):
+            return [self._redact_image_bytes(item) for item in value]
+        return value
 
     def _generation_prompt(self, job: Job) -> str:
         parts = [job.prompt.strip()]

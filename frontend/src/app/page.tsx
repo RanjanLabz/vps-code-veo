@@ -168,6 +168,11 @@ type Job = {
   capacity_snapshot?: CapacitySnapshot[];
   payload?: {
     worker_result?: WorkerResult;
+    inputs?: {
+      image_media_id?: string;
+      image_url?: string;
+      image_data_url?: string;
+    };
     [key: string]: unknown;
   };
   timeline?: Record<string, string>;
@@ -199,10 +204,13 @@ type WorkerResult = {
   completed_at?: string | null;
   timeline?: Record<string, string>;
   payload?: {
+    input_image_media_id?: string;
     flowkit_result?: {
       project_id?: string;
       image_media_id?: string;
       video_media_id?: string;
+      input_image_media_id?: string;
+      input_image_used?: boolean;
     };
   };
 };
@@ -1393,6 +1401,9 @@ function JobCard({ job }: { job: Job }) {
   const events = jobEvents(job);
   const model = job.flow_settings?.model || "model pending";
   const points = job.flow_settings?.estimated_credits;
+  const flowkitResult = local?.payload?.flowkit_result;
+  const inputImageMediaId = flowkitResult?.input_image_media_id || local?.payload?.input_image_media_id || job.payload?.inputs?.image_media_id;
+  const inputImageUsed = Boolean(flowkitResult?.input_image_used || inputImageMediaId);
   const whyWaiting = job.capacity_snapshot?.map((item) => `${item.vps_id}: ${item.reason}`).join(" | ");
   const detail =
     job.last_error ||
@@ -1446,8 +1457,10 @@ function JobCard({ job }: { job: Job }) {
         <Info label="Local retries" value={local ? `${local.retries ?? 0}/${local.max_retries ?? 0}` : "pending"} compact />
         <Info label="Browser" value={local?.browser_url || "pending"} compact />
         <Info label="Outputs" value={String(urls.length)} compact warning={job.state === "COMPLETED" && urls.length === 0} />
-        <Info label="FlowKit project" value={local?.payload?.flowkit_result?.project_id || "pending"} compact />
-        <Info label="Media ID" value={local?.payload?.flowkit_result?.image_media_id || local?.payload?.flowkit_result?.video_media_id || "pending"} compact />
+        <Info label="FlowKit project" value={flowkitResult?.project_id || "pending"} compact />
+        <Info label="Input image used" value={inputImageUsed ? "yes" : (job.generation_type.includes("image_to") ? "no" : "n/a")} compact warning={job.generation_type.includes("image_to") && !inputImageUsed} />
+        <Info label="Input media ID" value={inputImageMediaId || "pending"} compact warning={job.generation_type.includes("image_to") && !inputImageMediaId} />
+        <Info label="Output media ID" value={flowkitResult?.image_media_id || flowkitResult?.video_media_id || "pending"} compact />
         <Info label="Worker state" value={local?.state || "pending"} compact />
       </div>
       <EventRail events={events} />
