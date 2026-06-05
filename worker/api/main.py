@@ -5,7 +5,7 @@ import os
 import secrets
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import AsyncIterator, Literal
+from typing import Any, AsyncIterator, Literal
 
 import yaml
 from fastapi import FastAPI, HTTPException, Query, Request
@@ -249,31 +249,31 @@ async def patch_settings(request: Request, account_id: str, payload: dict) -> di
 @app.post("/jobs", status_code=201)
 async def create_job(payload: dict) -> dict:
     job = await state().queue.enqueue(payload)
-    return job.model_dump()
+    return public_job_dump(job)
 
 
 @app.post("/generate/text-to-image", status_code=202)
 async def generate_text_to_image(payload: GenerationRequest) -> dict:
     job = await state().queue.enqueue(generation_payload("text_to_image", payload))
-    return job.model_dump()
+    return public_job_dump(job)
 
 
 @app.post("/generate/image-to-image", status_code=202)
 async def generate_image_to_image(payload: GenerationRequest) -> dict:
     job = await state().queue.enqueue(generation_payload("image_to_image", payload))
-    return job.model_dump()
+    return public_job_dump(job)
 
 
 @app.post("/generate/text-to-video", status_code=202)
 async def generate_text_to_video(payload: GenerationRequest) -> dict:
     job = await state().queue.enqueue(generation_payload("text_to_video", payload))
-    return job.model_dump()
+    return public_job_dump(job)
 
 
 @app.post("/generate/image-to-video", status_code=202)
 async def generate_image_to_video(payload: GenerationRequest) -> dict:
     job = await state().queue.enqueue(generation_payload("image_to_video", payload))
-    return job.model_dump()
+    return public_job_dump(job)
 
 
 @app.post("/flowkit/{account_id}/callback")
@@ -284,7 +284,7 @@ async def flowkit_callback(account_id: str, payload: dict) -> dict:
 @app.get("/jobs")
 async def list_jobs(limit: int = Query(100, ge=1, le=1000)) -> list[dict]:
     jobs = await state().queue.list_jobs(limit=limit)
-    return [job.model_dump() for job in jobs]
+    return [public_job_dump(job) for job in jobs]
 
 
 @app.get("/jobs/{job_id}")
@@ -292,7 +292,25 @@ async def get_job(job_id: str) -> dict:
     job = await state().queue.get_job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="job not found")
-    return job.model_dump()
+    return public_job_dump(job)
+
+
+def public_job_dump(job) -> dict[str, Any]:
+    return redact_large_payload(job.model_dump())
+
+
+def redact_large_payload(value: Any) -> Any:
+    if isinstance(value, dict):
+        redacted: dict[str, Any] = {}
+        for key, child in value.items():
+            if key in {"image_data_url", "imageBytes", "encodedImage", "encodedVideo"}:
+                redacted[key] = f"<redacted:{len(child)} chars>" if isinstance(child, str) else "<redacted>"
+            else:
+                redacted[key] = redact_large_payload(child)
+        return redacted
+    if isinstance(value, list):
+        return [redact_large_payload(item) for item in value]
+    return value
 
 
 @app.get("/media/videos/{filename}")

@@ -354,22 +354,22 @@ async def patch_flow_settings(payload: dict) -> dict:
 
 @app.post("/generate/text-to-image", status_code=202)
 async def generate_text_to_image(payload: GenerationRequest) -> dict:
-    return (await enqueue_generation("text_to_image", payload)).model_dump()
+    return public_job_dump(await enqueue_generation("text_to_image", payload))
 
 
 @app.post("/generate/image-to-image", status_code=202)
 async def generate_image_to_image(payload: GenerationRequest) -> dict:
-    return (await enqueue_generation("image_to_image", payload)).model_dump()
+    return public_job_dump(await enqueue_generation("image_to_image", payload))
 
 
 @app.post("/generate/text-to-video", status_code=202)
 async def generate_text_to_video(payload: GenerationRequest) -> dict:
-    return (await enqueue_generation("text_to_video", payload)).model_dump()
+    return public_job_dump(await enqueue_generation("text_to_video", payload))
 
 
 @app.post("/generate/image-to-video", status_code=202)
 async def generate_image_to_video(payload: GenerationRequest) -> dict:
-    return (await enqueue_generation("image_to_video", payload)).model_dump()
+    return public_job_dump(await enqueue_generation("image_to_video", payload))
 
 
 @app.get("/jobs")
@@ -387,7 +387,7 @@ async def get_job(job_id: str) -> dict:
 
 
 async def enriched_job(job: GlobalJob) -> dict:
-    data = job.model_dump()
+    data = public_job_dump(job)
     if not job.assigned_worker_id:
         data["routing_status"] = "waiting_for_vps"
         data["capacity_snapshot"] = capacity_snapshot()
@@ -411,6 +411,24 @@ async def enriched_job(job: GlobalJob) -> dict:
         data["worker_status_error"] = str(exc)
     data["progress"] = await job_progress(job, data)
     return data
+
+
+def public_job_dump(job: GlobalJob) -> dict[str, Any]:
+    return redact_large_payload(job.model_dump())
+
+
+def redact_large_payload(value: Any) -> Any:
+    if isinstance(value, dict):
+        redacted: dict[str, Any] = {}
+        for key, child in value.items():
+            if key in {"image_data_url", "imageBytes", "encodedImage", "encodedVideo"}:
+                redacted[key] = f"<redacted:{len(child)} chars>" if isinstance(child, str) else "<redacted>"
+            else:
+                redacted[key] = redact_large_payload(child)
+        return redacted
+    if isinstance(value, list):
+        return [redact_large_payload(item) for item in value]
+    return value
 
 
 async def job_progress(job: GlobalJob, data: dict[str, Any]) -> dict[str, Any]:

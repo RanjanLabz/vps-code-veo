@@ -23,7 +23,12 @@ class QueueManager:
     async def connect(self) -> None:
         if not self.redis_url or self.redis_url.startswith("${"):
             raise RuntimeError("REDIS_URL is required for the worker queue")
-        self.redis = Redis.from_url(self.redis_url, decode_responses=True)
+        self.redis = Redis.from_url(
+            self.redis_url,
+            decode_responses=True,
+            max_connections=4,
+            socket_keepalive=True,
+        )
         await self.redis.ping()
 
     async def close(self) -> None:
