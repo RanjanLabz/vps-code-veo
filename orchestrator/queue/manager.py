@@ -144,7 +144,6 @@ class GlobalQueue:
             return 0
         raw_jobs = await self.redis.hmget(self.jobs_key, active_ids)
         stale_ids: list[str] = []
-        terminal = {JobState.COMPLETED, JobState.FAILED, JobState.TIMEOUT}
         for job_id, raw in zip(active_ids, raw_jobs, strict=False):
             if not raw:
                 stale_ids.append(job_id)
@@ -154,7 +153,7 @@ class GlobalQueue:
             except Exception:
                 stale_ids.append(job_id)
                 continue
-            if job.state in terminal:
+            if job.state != JobState.ASSIGNED:
                 stale_ids.append(job_id)
         if stale_ids:
             await self.redis.hdel(self.active_key, *stale_ids)

@@ -54,11 +54,16 @@ class QueueManager:
 
     async def list_jobs(self, limit: int = 100) -> list[Job]:
         assert self.redis is not None
-        ids = await self.redis.zrevrange(self.job_ids_key, 0, limit - 1)
+        recent_ids = await self.redis.zrevrange(self.job_ids_key, 0, limit - 1)
+        active_ids = await self.redis.hkeys(self.active_key)
+        ids = list(dict.fromkeys([*active_ids, *recent_ids]))
         if not ids:
             return []
         raw_jobs = await self.redis.hmget(self.jobs_key, ids)
-        return [Job.model_validate_json(raw) for raw in raw_jobs if raw]
+        jobs = [Job.model_validate_json(raw) for raw in raw_jobs if raw]
+        active_states = {JobState.ASSIGNED, JobState.PROCESSING}
+        jobs.sort(key=lambda job: (job.state in active_states, job.created_at), reverse=True)
+        return jobs[:limit]
 
     async def pop_ready(self) -> Job | None:
         assert self.redis is not None
@@ -118,7 +123,7 @@ class QueueManager:
             return 0
         raw_jobs = await self.redis.hmget(self.jobs_key, active_ids)
         stale_ids: list[str] = []
-        terminal = {JobState.COMPLETED, JobState.FAILED, JobState.TIMEOUT}
+        valid_active_states = {JobState.ASSIGNED, JobState.PROCESSING}
         for job_id, raw in zip(active_ids, raw_jobs, strict=False):
             if not raw:
                 stale_ids.append(job_id)
@@ -128,7 +133,7 @@ class QueueManager:
             except Exception:
                 stale_ids.append(job_id)
                 continue
-            if job.state in terminal:
+            if job.state not in valid_active_states:
                 stale_ids.append(job_id)
         if stale_ids:
             await self.redis.hdel(self.active_key, *stale_ids)
