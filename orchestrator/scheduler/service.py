@@ -13,6 +13,21 @@ from orchestrator.queue.models import GlobalJob, JobState
 from orchestrator.workers.client import WorkerClient
 
 logger = logging.getLogger(__name__)
+LARGE_PAYLOAD_KEYS = {"image_data_url", "imageBytes", "encodedImage", "encodedVideo"}
+
+
+def redact_large_payload(value):
+    if isinstance(value, dict):
+        redacted = {}
+        for key, child in value.items():
+            if key in LARGE_PAYLOAD_KEYS:
+                redacted[key] = f"<redacted:{len(child)} chars>" if isinstance(child, str) else "<redacted>"
+            else:
+                redacted[key] = redact_large_payload(child)
+        return redacted
+    if isinstance(value, list):
+        return [redact_large_payload(item) for item in value]
+    return value
 
 
 class GlobalScheduler:
@@ -136,7 +151,7 @@ class GlobalScheduler:
             job.state = JobState(worker_state)
             job.completed_at = datetime.now(timezone.utc)
             job.last_error = None if job.state == JobState.COMPLETED else worker_job.get("last_error")
-            job.payload["worker_result"] = worker_job
+            job.payload["worker_result"] = redact_large_payload(worker_job)
             if job.state == JobState.COMPLETED:
                 job.stamp("global_completed")
             else:

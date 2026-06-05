@@ -404,7 +404,7 @@ async def enriched_job(job: GlobalJob) -> dict:
         data["progress"] = await job_progress(job, data)
         return data
     try:
-        data["live_worker_job"] = await state().worker_client.job(worker, job.worker_job_id)
+        data["live_worker_job"] = redact_large_payload(await state().worker_client.job(worker, job.worker_job_id))
         data["routing_status"] = "local_job_visible"
     except Exception as exc:
         data["routing_status"] = "local_job_unreachable"
