@@ -188,9 +188,12 @@ async def health() -> dict:
 
 
 @app.get("/metrics")
-async def metrics(limit: int = Query(1000, ge=1, le=5000)) -> dict:
-    jobs = await state().queue.list_jobs(limit=limit)
+async def metrics(limit: int = Query(200, ge=1, le=1000)) -> dict:
     statuses = await state().workers.refresh_all()
+    try:
+        jobs = await state().queue.list_jobs(limit=limit)
+    except Exception as exc:
+        return degraded_metrics(statuses, f"job history unavailable: {exc}")
     now = datetime.now(timezone.utc)
     by_state: dict[str, int] = {}
     by_type: dict[str, int] = {}
@@ -204,42 +207,46 @@ async def metrics(limit: int = Query(1000, ge=1, le=5000)) -> dict:
     failed = 0
     completed = 0
 
+    skipped_jobs = 0
     for job in jobs:
-        by_state[job.state.value] = by_state.get(job.state.value, 0) + 1
-        by_type[job.generation_type] = by_type.get(job.generation_type, 0) + 1
-        if job.state.value in {"FAILED", "TIMEOUT"}:
-            failed += 1
-        if job.state.value == "COMPLETED":
-            completed += 1
-        if job.created_at >= now - timedelta(minutes=15):
-            last_15m += 1
-        if job.created_at >= now - timedelta(hours=1):
-            last_1h += 1
+        try:
+            by_state[job.state.value] = by_state.get(job.state.value, 0) + 1
+            by_type[job.generation_type] = by_type.get(job.generation_type, 0) + 1
+            if job.state.value in {"FAILED", "TIMEOUT"}:
+                failed += 1
+            if job.state.value == "COMPLETED":
+                completed += 1
+            if job.created_at >= now - timedelta(minutes=15):
+                last_15m += 1
+            if job.created_at >= now - timedelta(hours=1):
+                last_1h += 1
 
-        created = job.timeline.get("api_received") or job.created_at
-        vps_selected = job.timeline.get("vps_selected") or job.assigned_at
-        completed_at = job.completed_at
-        if vps_selected:
-            global_queue_seconds.append((vps_selected - created).total_seconds())
+            created = job.timeline.get("api_received") or job.created_at
+            vps_selected = job.timeline.get("vps_selected") or job.assigned_at
+            completed_at = job.completed_at
+            if vps_selected:
+                global_queue_seconds.append((vps_selected - created).total_seconds())
 
-        worker_result = metrics_worker_result(job)
-        local_queued = parse_datetime(worker_result.get("queued_at")) if worker_result else None
-        account_started = (
-            parse_datetime((worker_result.get("timeline") or {}).get("account_selected"))
-            or parse_datetime(worker_result.get("started_at"))
-            if worker_result
-            else None
-        )
-        if local_queued and account_started:
-            local_account_queue_seconds.append((account_started - local_queued).total_seconds())
-        if account_started:
-            queue_to_account_seconds.append((account_started - created).total_seconds())
+            worker_result = metrics_worker_result(job)
+            local_queued = parse_datetime(worker_result.get("queued_at")) if worker_result else None
+            account_started = (
+                parse_datetime((worker_result.get("timeline") or {}).get("account_selected"))
+                or parse_datetime(worker_result.get("started_at"))
+                if worker_result
+                else None
+            )
+            if local_queued and account_started:
+                local_account_queue_seconds.append((account_started - local_queued).total_seconds())
+            if account_started:
+                queue_to_account_seconds.append((account_started - created).total_seconds())
 
-        processing_started = account_started or vps_selected
-        if processing_started and completed_at:
-            processing_seconds.append((completed_at - processing_started).total_seconds())
-        if completed_at:
-            total_seconds.append((completed_at - created).total_seconds())
+            processing_started = account_started or vps_selected
+            if processing_started and completed_at:
+                processing_seconds.append((completed_at - processing_started).total_seconds())
+            if completed_at:
+                total_seconds.append((completed_at - created).total_seconds())
+        except Exception:
+            skipped_jobs += 1
 
     free_slots = sum(status.capacity_remaining for status in statuses if status.online)
     queue_depth = by_state.get("QUEUED", 0) + by_state.get("RETRYING", 0)
@@ -280,7 +287,43 @@ async def metrics(limit: int = Query(1000, ge=1, le=5000)) -> dict:
         "free_account_slots": free_slots,
         "workers_online": len([status for status in statuses if status.online]),
         "workers_total": len(statuses),
+        "skipped_jobs": skipped_jobs,
         "recommendations": recommendations,
+    }
+
+
+def degraded_metrics(statuses, reason: str) -> dict[str, Any]:
+    free_slots = sum(status.capacity_remaining for status in statuses if status.online)
+    return {
+        "sample_size": 0,
+        "total_jobs": 0,
+        "by_state": {},
+        "by_type": {},
+        "completed_jobs": 0,
+        "failed_jobs": 0,
+        "active_jobs": sum(status.active_jobs for status in statuses if status.online),
+        "global_queue_depth": 0,
+        "requested_last_15m": 0,
+        "requested_last_1h": 0,
+        "avg_total_job_seconds": None,
+        "avg_wait_seconds": None,
+        "avg_global_queue_seconds": None,
+        "avg_local_account_queue_seconds": None,
+        "avg_queue_to_account_seconds": None,
+        "avg_processing_seconds": None,
+        "total_job_seconds": 0,
+        "total_wait_seconds": 0,
+        "total_global_queue_seconds": 0,
+        "total_local_account_queue_seconds": 0,
+        "total_queue_to_account_seconds": 0,
+        "total_processing_seconds": 0,
+        "free_account_slots": free_slots,
+        "workers_online": len([status for status in statuses if status.online]),
+        "workers_total": len(statuses),
+        "skipped_jobs": 0,
+        "degraded": True,
+        "degraded_reason": reason,
+        "recommendations": ["Metrics history is temporarily unavailable; live VPS health still works."],
     }
 
 
@@ -394,7 +437,7 @@ async def generate_image_to_video(payload: GenerationRequest) -> dict:
 
 
 @app.get("/jobs")
-async def list_jobs(limit: int = Query(100, ge=1, le=1000)) -> list[dict]:
+async def list_jobs(limit: int = Query(50, ge=1, le=200)) -> list[dict]:
     jobs = await state().queue.list_jobs(limit=limit)
     return [await enriched_job(job) for job in jobs]
 
@@ -528,7 +571,16 @@ async def job_progress(job: GlobalJob, data: dict[str, Any]) -> dict[str, Any]:
 
 
 async def progress_metrics() -> dict[str, float | None]:
-    jobs = await state().queue.list_jobs(limit=500)
+    try:
+        jobs = await state().queue.list_jobs(limit=200)
+    except Exception:
+        return {
+            "avg_queue_to_account_seconds": None,
+            "avg_text_to_image_seconds": None,
+            "avg_image_to_image_seconds": None,
+            "avg_text_to_video_seconds": None,
+            "avg_image_to_video_seconds": None,
+        }
     queue_to_account_seconds: list[float] = []
     processing_by_type: dict[str, list[float]] = {}
     for job in jobs:
@@ -569,7 +621,10 @@ def default_expected_processing_seconds(generation_type: str) -> int:
 async def queue_position_for(job: GlobalJob) -> int | None:
     if job.assigned_worker_id:
         return None
-    jobs = await state().queue.list_jobs(limit=1000)
+    try:
+        jobs = await state().queue.list_jobs(limit=200)
+    except Exception:
+        return None
     waiting = [
         item
         for item in sorted(jobs, key=lambda item: item.queued_at)
