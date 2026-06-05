@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
+import os
 import secrets
 import time
 from typing import Any, AsyncIterator, Literal
@@ -139,7 +140,25 @@ def rate_limit(request: Request, limit: int) -> bool:
 @app.get("/")
 async def root() -> dict:
     docs = "/docs" if state().settings.security.allow_public_docs else None
-    return {"service": "flow-global-orchestrator", "docs": docs, "health": "/health"}
+    return {
+        "service": "flow-global-orchestrator",
+        "docs": docs,
+        "health": "/health",
+        "version": deployment_version(),
+    }
+
+
+@app.get("/version")
+async def version() -> dict[str, str | None]:
+    return deployment_version()
+
+
+def deployment_version() -> dict[str, str | None]:
+    return {
+        "commit": os.getenv("RENDER_GIT_COMMIT") or os.getenv("GIT_COMMIT"),
+        "branch": os.getenv("RENDER_GIT_BRANCH") or os.getenv("GIT_BRANCH"),
+        "service": os.getenv("RENDER_SERVICE_NAME"),
+    }
 
 
 @app.get("/health")
