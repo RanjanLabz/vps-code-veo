@@ -109,6 +109,8 @@ async def security_middleware(request: Request, call_next):
 def is_public_path(path: str, allow_public_health: bool, allow_public_docs: bool) -> bool:
     if path == "/":
         return True
+    if path == "/version":
+        return True
     if allow_public_health and path == "/health":
         return True
     if allow_public_docs and path in {"/docs", "/redoc", "/openapi.json"}:
