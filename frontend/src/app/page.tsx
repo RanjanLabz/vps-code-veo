@@ -242,7 +242,9 @@ function cls(...items: Array<string | false | null | undefined>) {
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const token = storedToken();
-  const response = await fetch(`${API}${path}`, {
+  const url = new URL(`${API}${path}`, window.location.origin);
+  if (!url.searchParams.has("_t")) url.searchParams.set("_t", String(Date.now()));
+  const response = await fetch(url.toString(), {
     ...init,
     headers: {
       "content-type": "application/json",
@@ -257,7 +259,9 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
 
 async function adminApi<T>(path: string, init?: RequestInit): Promise<T> {
   const token = storedToken();
-  const response = await fetch(`/api/admin${path}`, {
+  const url = new URL(`/api/admin${path}`, window.location.origin);
+  if (!url.searchParams.has("_t")) url.searchParams.set("_t", String(Date.now()));
+  const response = await fetch(url.toString(), {
     ...init,
     headers: {
       "content-type": "application/json",
