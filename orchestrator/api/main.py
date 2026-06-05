@@ -20,6 +20,7 @@ from orchestrator.flow_config.manager import FlowConfigManager
 from orchestrator.queue.manager import GlobalQueue
 from orchestrator.queue.models import GenerationType, GlobalJob
 from orchestrator.scheduler.service import GlobalScheduler
+from orchestrator.storage.r2 import R2ImageStore
 from orchestrator.workers.client import WorkerClient
 from orchestrator.workers.registry import WorkerRegistry
 
@@ -740,6 +741,7 @@ def metrics_worker_result(job: GlobalJob) -> dict[str, Any] | None:
 async def enqueue_generation(generation_type: GenerationType, payload: GenerationRequest) -> GlobalJob:
     flow_settings = state().flow_config.resolve(generation_type, payload.flow_override)
     production_defaults_used = payload.flow_override is None
+    job_payload = await externalize_image_inputs(payload.model_dump(exclude_none=True))
     job = GlobalJob(
         prompt=payload.prompt,
         generation_type=generation_type,
@@ -748,7 +750,7 @@ async def enqueue_generation(generation_type: GenerationType, payload: Generatio
         preferred_worker_id=payload.preferred_worker_id,
         preferred_account_id=payload.preferred_account_id,
         max_retries=state().settings.queue.max_retries,
-        payload=payload.model_dump(exclude_none=True),
+        payload=job_payload,
     )
     job.stamp("api_received")
     job.stamp("global_queued")
@@ -758,6 +760,32 @@ async def enqueue_generation(generation_type: GenerationType, payload: Generatio
         raise HTTPException(status_code=503, detail=f"global queue unavailable: {exc}") from exc
     await state().store.save_job(job)
     return job
+
+
+async def externalize_image_inputs(job_payload: dict[str, Any]) -> dict[str, Any]:
+    inputs = job_payload.get("inputs")
+    if not isinstance(inputs, dict):
+        return job_payload
+    data_url = inputs.get("image_data_url")
+    if not isinstance(data_url, str) or not data_url.strip():
+        return job_payload
+    stored = await R2ImageStore(state().settings.storage).store_data_url(data_url)
+    inputs = dict(inputs)
+    inputs.pop("image_data_url", None)
+    inputs["image_url"] = stored.image_url
+    inputs["image_storage"] = {
+        "provider": "cloudflare_r2",
+        "key": stored.key,
+        "content_type": stored.content_type,
+        "size_bytes": stored.size_bytes,
+    }
+    job_payload = dict(job_payload)
+    job_payload["inputs"] = inputs
+    metadata = dict(job_payload.get("metadata") or {})
+    metadata["input_image_stored"] = True
+    metadata["input_image_storage_key"] = stored.key
+    job_payload["metadata"] = metadata
+    return job_payload
 
 
 if __name__ == "__main__":

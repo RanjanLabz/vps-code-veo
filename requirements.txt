@@ -9,3 +9,4 @@ websockets==14.1
 httpx==0.28.1
 asyncpg==0.30.0
 motor==3.7.1
+boto3==1.35.99
