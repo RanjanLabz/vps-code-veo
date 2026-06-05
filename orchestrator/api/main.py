@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 import secrets
 import time
-from typing import Any, AsyncIterator
+from typing import Any, AsyncIterator, Literal
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
@@ -25,6 +25,8 @@ from orchestrator.workers.registry import WorkerRegistry
 
 class GenerationRequest(BaseModel):
     prompt: str = Field(min_length=1)
+    caption: str | None = None
+    aspect_ratio: Literal["16:9", "9:16", "1:1"] = "16:9"
     inputs: dict[str, Any] | None = None
     presets: dict[str, Any] | None = None
     flow_override: dict[str, Any] | None = None

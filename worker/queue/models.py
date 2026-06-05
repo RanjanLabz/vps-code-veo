@@ -29,6 +29,8 @@ class Job(BaseModel):
     flow_model: str | None = None
     duration: int | None = None
     estimated_credits: int | None = None
+    aspect_ratio: str = "16:9"
+    caption: str | None = None
     payload: dict[str, Any] = Field(default_factory=dict)
     timeline: dict[str, datetime] = Field(default_factory=dict)
     state: JobState = JobState.QUEUED
@@ -57,6 +59,8 @@ class Job(BaseModel):
             flow_model=flow_settings.get("model") or payload.get("flow_model"),
             duration=flow_settings.get("duration") or payload.get("duration"),
             estimated_credits=flow_settings.get("estimated_credits") or payload.get("estimated_credits"),
+            aspect_ratio=str(payload.get("aspect_ratio") or "16:9"),
+            caption=payload.get("caption"),
             payload=payload,
             max_retries=max_retries,
         )

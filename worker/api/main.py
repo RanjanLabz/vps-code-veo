@@ -5,7 +5,7 @@ import os
 import secrets
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import AsyncIterator
+from typing import AsyncIterator, Literal
 
 import yaml
 from fastapi import FastAPI, HTTPException, Query, Request
@@ -25,6 +25,8 @@ from worker.storage.account_store import AccountStore
 
 class GenerationRequest(BaseModel):
     prompt: str = Field(min_length=1)
+    caption: str | None = None
+    aspect_ratio: Literal["16:9", "9:16", "1:1"] = "16:9"
     inputs: dict | None = None
     presets: dict | None = None
     metadata: dict | None = None

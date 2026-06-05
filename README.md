@@ -152,9 +152,29 @@ curl -X PATCH http://localhost:8090/flow-settings \
 Submit a generation request using the global settings:
 
 ```bash
-curl -X POST http://localhost:8090/generate/text-to-video \
+curl -X POST https://flowkit-global-orchestrator.onrender.com/generate/text-to-video \
   -H 'content-type: application/json' \
-  -d '{"prompt":"cinematic Tokyo rain street"}'
+  -H 'x-api-key: <orchestrator-api-key>' \
+  -d '{"prompt":"cinematic Tokyo rain street","aspect_ratio":"16:9"}'
+```
+
+Image-to-image and image-to-video jobs require an input image. Send one of
+`inputs.image_url`, `inputs.image_data_url`, or `inputs.image_media_id`.
+Use `caption` for the edit/reference instruction and `aspect_ratio` for output
+size (`16:9`, `9:16`, or `1:1`):
+
+```bash
+curl -X POST https://flowkit-global-orchestrator.onrender.com/generate/image-to-image \
+  -H 'content-type: application/json' \
+  -H 'x-api-key: <orchestrator-api-key>' \
+  -d '{
+    "prompt": "turn this product photo into a cinematic ad frame",
+    "caption": "Preserve the product shape and logo, change the background to neon Tokyo rain.",
+    "aspect_ratio": "16:9",
+    "inputs": {
+      "image_url": "https://example.com/input.png"
+    }
+  }'
 ```
 
 Register another VPS worker with the orchestrator:
@@ -238,7 +258,7 @@ The normal production API path does not require users to choose a VPS or account
 ```bash
 curl -X POST http://localhost:8090/generate/text-to-video \
   -H 'content-type: application/json' \
-  -d '{"prompt":"cinematic Tokyo rain street"}'
+  -d '{"prompt":"cinematic Tokyo rain street","aspect_ratio":"9:16"}'
 ```
 
 The global scheduler checks free account slots across all enabled VPS workers. If every account on every VPS is busy, the job stays in the global Redis queue and is retried until capacity opens.

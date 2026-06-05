@@ -22,6 +22,18 @@ VIDEO_MODELS = {
     "veo-3-fast": "veo_3_1_i2v_s_fast",
 }
 
+IMAGE_ASPECT_RATIOS = {
+    "16:9": "IMAGE_ASPECT_RATIO_LANDSCAPE",
+    "9:16": "IMAGE_ASPECT_RATIO_PORTRAIT",
+    "1:1": "IMAGE_ASPECT_RATIO_SQUARE",
+}
+
+VIDEO_ASPECT_RATIOS = {
+    "16:9": "VIDEO_ASPECT_RATIO_LANDSCAPE",
+    "9:16": "VIDEO_ASPECT_RATIO_PORTRAIT",
+    "1:1": "VIDEO_ASPECT_RATIO_SQUARE",
+}
+
 
 def browser_headers() -> dict[str, str]:
     user_agent = random.choice(
@@ -74,7 +86,7 @@ def create_project_request(title: str) -> dict[str, Any]:
     }
 
 
-def generate_image_request(prompt: str, project_id: str, model: str | None = None) -> dict[str, Any]:
+def generate_image_request(prompt: str, project_id: str, model: str | None = None, aspect_ratio: str = "16:9") -> dict[str, Any]:
     ts = int(time.time() * 1000)
     ctx = client_context(project_id)
     image_model = IMAGE_MODELS.get(model or "", "NARWHAL")
@@ -85,7 +97,7 @@ def generate_image_request(prompt: str, project_id: str, model: str | None = Non
                 "clientContext": {**ctx, "sessionId": f";{ts}"},
                 "seed": ts % 1000000,
                 "structuredPrompt": {"parts": [{"text": prompt}]},
-                "imageAspectRatio": "IMAGE_ASPECT_RATIO_LANDSCAPE",
+                "imageAspectRatio": IMAGE_ASPECT_RATIOS.get(aspect_ratio, "IMAGE_ASPECT_RATIO_LANDSCAPE"),
                 "imageModelName": image_model,
             }
         ],
@@ -99,14 +111,14 @@ def generate_image_request(prompt: str, project_id: str, model: str | None = Non
     }
 
 
-def generate_video_request(prompt: str, project_id: str, start_media_id: str, model: str | None = None) -> dict[str, Any]:
+def generate_video_request(prompt: str, project_id: str, start_media_id: str, model: str | None = None, aspect_ratio: str = "16:9") -> dict[str, Any]:
     model_key = VIDEO_MODELS.get(model or "", "veo_3_1_i2v_lite_low_priority")
     body = {
         "mediaGenerationContext": {"batchId": str(uuid.uuid4())},
         "clientContext": client_context(project_id),
         "requests": [
             {
-                "aspectRatio": "VIDEO_ASPECT_RATIO_LANDSCAPE",
+                "aspectRatio": VIDEO_ASPECT_RATIOS.get(aspect_ratio, "VIDEO_ASPECT_RATIO_LANDSCAPE"),
                 "seed": int(time.time()) % 10000,
                 "textInput": {"structuredPrompt": {"parts": [{"text": prompt}]}},
                 "videoModelKey": model_key,

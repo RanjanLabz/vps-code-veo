@@ -116,6 +116,7 @@ class JobExecutor:
 
     async def _run_flowkit_generation(self, job: Job, account: Account) -> dict:
         project_title = f"worker-{job.id}"
+        generation_prompt = self._generation_prompt(job)
         project_result = await self.accounts.flowkit.send(
             account.id,
             "trpc_request",
@@ -128,16 +129,25 @@ class JobExecutor:
         if not project_id:
             raise RuntimeError(f"FlowKit create project did not return project id: {project_result}")
 
-        image_result = await self.accounts.flowkit.send(
-            account.id,
-            "api_request",
-            generate_image_request(job.prompt, project_id, job.flow_model),
-            timeout=90,
-        )
-        if image_result.get("error") or int(image_result.get("status") or 200) >= 400:
-            raise RuntimeError(f"FlowKit image request failed: {image_result}")
-        image_media_id = self._extract_media_id(image_result)
-        output_urls = await self._extract_urls(image_result)
+        inputs = job.payload.get("inputs") if isinstance(job.payload.get("inputs"), dict) else {}
+        image_media_id = str(inputs.get("image_media_id") or "").strip() or None
+        image_result: dict[str, Any] | None = None
+        output_urls: list[str] = []
+        if job.generation_type == "image_to_video" and image_media_id:
+            job.stamp("input_image_media_id_used")
+        else:
+            if job.generation_type in {"image_to_image", "image_to_video"} and not (inputs.get("image_url") or inputs.get("image_data_url") or image_media_id):
+                raise RuntimeError("Image input missing: send inputs.image_url, inputs.image_data_url, or inputs.image_media_id.")
+            image_result = await self.accounts.flowkit.send(
+                account.id,
+                "api_request",
+                generate_image_request(generation_prompt, project_id, job.flow_model, job.aspect_ratio),
+                timeout=90,
+            )
+            if image_result.get("error") or int(image_result.get("status") or 200) >= 400:
+                raise RuntimeError(f"FlowKit image request failed: {image_result}")
+            image_media_id = self._extract_media_id(image_result)
+            output_urls = await self._extract_urls(image_result)
 
         if job.generation_type in {"text_to_video", "image_to_video"}:
             if not image_media_id:
@@ -145,7 +155,7 @@ class JobExecutor:
             video_result = await self.accounts.flowkit.send(
                 account.id,
                 "api_request",
-                generate_video_request(job.prompt, project_id, image_media_id, job.flow_model),
+                generate_video_request(generation_prompt, project_id, image_media_id, job.flow_model, job.aspect_ratio),
                 timeout=90,
             )
             if video_result.get("error") or int(video_result.get("status") or 200) >= 400:
@@ -169,6 +179,8 @@ class JobExecutor:
                 "project_id": project_id,
                 "image_media_id": image_media_id,
                 "video_media_id": video_media_id,
+                "aspect_ratio": job.aspect_ratio,
+                "caption": job.caption,
                 "image_result": image_result,
                 "video_result": video_result,
                 "output_urls": sorted(set(output_urls)),
@@ -177,9 +189,21 @@ class JobExecutor:
         return {
             "project_id": project_id,
             "image_media_id": image_media_id,
+            "aspect_ratio": job.aspect_ratio,
+            "caption": job.caption,
             "image_result": image_result,
             "output_urls": sorted(set(output_urls)),
         }
+
+    def _generation_prompt(self, job: Job) -> str:
+        parts = [job.prompt.strip()]
+        if job.caption:
+            parts.append(f"Image instruction: {job.caption.strip()}")
+        if job.generation_type in {"image_to_image", "image_to_video"}:
+            inputs = job.payload.get("inputs") if isinstance(job.payload.get("inputs"), dict) else {}
+            if inputs.get("image_url") or inputs.get("image_data_url") or inputs.get("image_media_id"):
+                parts.append("Use the provided input image as the visual reference.")
+        return "\n\n".join(part for part in parts if part)
 
     async def _extract_urls(self, payload: object) -> list[str]:
         text = str(payload)

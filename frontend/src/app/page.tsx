@@ -34,6 +34,7 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 import { storedToken } from "@/lib/adminAuth";
 
 type GenerationType = "text_to_image" | "image_to_image" | "text_to_video" | "image_to_video";
+type AspectRatio = "16:9" | "9:16" | "1:1";
 
 type FlowSetting = {
   model?: string;
@@ -218,12 +219,20 @@ type AdminUser = {
 
 const API = "/api/orchestrator";
 const DEFAULT_WORKER_PUBLIC_BASE = process.env.NEXT_PUBLIC_WORKER_PUBLIC_BASE || "";
+const PUBLIC_ADMIN_URL = "https://flowkit-admin-panel.flowadminofficial.workers.dev";
+const PUBLIC_ORCHESTRATOR_URL = process.env.NEXT_PUBLIC_ORCHESTRATOR_PUBLIC_URL || "https://flowkit-global-orchestrator.onrender.com";
 
 const GENERATION_TYPES: Array<{ value: GenerationType; label: string }> = [
   { value: "text_to_image", label: "Text to Image" },
   { value: "image_to_image", label: "Image to Image" },
   { value: "text_to_video", label: "Text to Video" },
   { value: "image_to_video", label: "Image to Video" },
+];
+
+const ASPECT_RATIOS: Array<{ value: AspectRatio; label: string; hint: string }> = [
+  { value: "16:9", label: "16:9 landscape", hint: "YouTube / wide" },
+  { value: "9:16", label: "9:16 vertical", hint: "Shorts / mobile" },
+  { value: "1:1", label: "1:1 square", hint: "social square" },
 ];
 
 const EMPTY_SETTINGS: FlowSettings = {
@@ -310,6 +319,19 @@ function currentModelKey(setting: FlowSetting) {
     model: setting.model || "",
     duration: setting.duration,
     estimated_credits: setting.estimated_credits,
+  });
+}
+
+function needsImageInput(type: GenerationType) {
+  return type === "image_to_image" || type === "image_to_video";
+}
+
+function fileToDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(reader.error || new Error("Unable to read image file"));
+    reader.readAsDataURL(file);
   });
 }
 
@@ -499,6 +521,11 @@ export default function Home() {
 
   const [generationType, setGenerationType] = useState<GenerationType>("text_to_image");
   const [prompt, setPrompt] = useState("cinematic Tokyo rain street");
+  const [caption, setCaption] = useState("");
+  const [aspectRatio, setAspectRatio] = useState<AspectRatio>("16:9");
+  const [imageFile, setImageFile] = useState<File | null>(null);
+  const [imageUrl, setImageUrl] = useState("");
+  const [imageMediaId, setImageMediaId] = useState("");
   const [preferredWorkerId, setPreferredWorkerId] = useState("");
   const [preferredAccountId, setPreferredAccountId] = useState("");
   const [resetPasswords, setResetPasswords] = useState<Record<string, string>>({});
@@ -625,9 +652,21 @@ export default function Home() {
 
   async function submitGeneration(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    const imageDataUrl = imageFile ? await fileToDataUrl(imageFile) : "";
+    if (needsImageInput(generationType) && !imageDataUrl && !imageUrl.trim() && !imageMediaId.trim()) {
+      setError("Image-to-image and image-to-video need an uploaded image, image URL, or Flow media id.");
+      return;
+    }
+    const inputs: Record<string, unknown> = {};
+    if (imageDataUrl) inputs.image_data_url = imageDataUrl;
+    if (imageUrl.trim()) inputs.image_url = imageUrl.trim();
+    if (imageMediaId.trim()) inputs.image_media_id = imageMediaId.trim();
     const body: Record<string, unknown> = {
       prompt,
-      metadata: { source: "admin-test-panel" },
+      aspect_ratio: aspectRatio,
+      caption: caption.trim() || undefined,
+      inputs: Object.keys(inputs).length ? inputs : undefined,
+      metadata: { source: "admin-test-panel", aspect_ratio: aspectRatio },
     };
     if (preferredWorkerId) body.preferred_worker_id = preferredWorkerId;
     if (preferredAccountId.trim()) body.preferred_account_id = preferredAccountId.trim();
@@ -847,6 +886,51 @@ export default function Home() {
                 <Field label="Prompt">
                   <textarea className="input min-h-24 py-2" value={prompt} onChange={(event) => setPrompt(event.target.value)} />
                 </Field>
+                <Field label="Output size">
+                  <select className="input" value={aspectRatio} onChange={(event) => setAspectRatio(event.target.value as AspectRatio)}>
+                    {ASPECT_RATIOS.map((item) => (
+                      <option key={item.value} value={item.value}>{item.label} | {item.hint}</option>
+                    ))}
+                  </select>
+                </Field>
+                {needsImageInput(generationType) && (
+                  <div className="grid gap-3 rounded-lg border border-blue-200 bg-blue-50 p-3">
+                    <div>
+                      <div className="text-sm font-semibold text-blue-950">Input image</div>
+                      <p className="mt-1 text-xs leading-5 text-blue-800">
+                        Upload a local image for this admin test, or paste an image URL / existing Flow media id for API-style testing.
+                      </p>
+                    </div>
+                    <Field label="Upload image">
+                      <input
+                        className="input file:mr-3 file:rounded-md file:border-0 file:bg-slate-950 file:px-3 file:py-1.5 file:text-sm file:font-semibold file:text-white"
+                        type="file"
+                        accept="image/png,image/jpeg,image/webp"
+                        onChange={(event) => setImageFile(event.target.files?.[0] || null)}
+                      />
+                    </Field>
+                    {imageFile && (
+                      <div className="flex items-center justify-between gap-3 rounded-lg border border-blue-100 bg-white px-3 py-2 text-xs text-slate-600">
+                        <span className="truncate">{imageFile.name} | {(imageFile.size / 1024 / 1024).toFixed(2)} MB</span>
+                        <button type="button" className="text-red-600" onClick={() => setImageFile(null)}>Remove</button>
+                      </div>
+                    )}
+                    <Field label="Image URL">
+                      <input className="input" value={imageUrl} onChange={(event) => setImageUrl(event.target.value)} placeholder="https://example.com/input.png" />
+                    </Field>
+                    <Field label="Flow media id">
+                      <input className="input" value={imageMediaId} onChange={(event) => setImageMediaId(event.target.value)} placeholder="existing Google Flow media UUID, optional" />
+                    </Field>
+                  </div>
+                )}
+                <Field label="Caption / image instruction">
+                  <textarea
+                    className="input min-h-20 py-2"
+                    value={caption}
+                    onChange={(event) => setCaption(event.target.value)}
+                    placeholder="Optional: describe what to preserve, change, or emphasize from the input image."
+                  />
+                </Field>
                 <Field label="Preferred VPS for test only">
                   <select className="input" value={preferredWorkerId} onChange={(event) => setPreferredWorkerId(event.target.value)}>
                     <option value="">Auto route across all VPS</option>
@@ -1046,10 +1130,24 @@ function MetricsBoard({ metrics }: { metrics: Metrics | null }) {
 
 function ApiDocs({ selectedType }: { selectedType: GenerationType }) {
   const path = `/api/orchestrator/generate/${selectedType.replaceAll("_", "-")}`;
-  const directPath = `${process.env.NEXT_PUBLIC_ORCHESTRATOR_PUBLIC_URL || "https://your-orchestrator.example.com"}/generate/${selectedType.replaceAll("_", "-")}`;
+  const publicProxyPath = `${PUBLIC_ADMIN_URL}${path}`;
+  const directPath = `${PUBLIC_ORCHESTRATOR_URL}/generate/${selectedType.replaceAll("_", "-")}`;
   const statusPath = "/api/orchestrator/jobs/{job_id}";
-  const directStatusPath = `${process.env.NEXT_PUBLIC_ORCHESTRATOR_PUBLIC_URL || "https://your-orchestrator.example.com"}/jobs/{job_id}`;
-  const body = `{\n  "prompt": "cinematic Tokyo rain street"\n}`;
+  const publicStatusPath = `${PUBLIC_ADMIN_URL}${statusPath}`;
+  const directStatusPath = `${PUBLIC_ORCHESTRATOR_URL}/jobs/{job_id}`;
+  const body = needsImageInput(selectedType)
+    ? `{
+  "prompt": "turn this product photo into a cinematic ad frame",
+  "caption": "Preserve the product shape and logo, change the background to neon Tokyo rain.",
+  "aspect_ratio": "16:9",
+  "inputs": {
+    "image_url": "https://example.com/input.png"
+  }
+}`
+    : `{
+  "prompt": "cinematic Tokyo rain street",
+  "aspect_ratio": "16:9"
+}`;
   const curl = `curl -X POST ${directPath} \\\n  -H "content-type: application/json" \\\n  -d '${body.replaceAll("\n", "")}'`;
   const statusCurl = `curl ${directStatusPath}`;
   const submitResponse = `{
@@ -1095,7 +1193,7 @@ function ApiDocs({ selectedType }: { selectedType: GenerationType }) {
               Your app sends a generation request, stores the returned job id, then polls job status every 2-5 seconds. The response tells users where the job is, how long it has waited, estimated ETA, output URLs, and the exact failure if something blocks.
             </p>
           </div>
-          <a className="command-button h-9" href={`${process.env.NEXT_PUBLIC_ORCHESTRATOR_PUBLIC_URL || "https://your-orchestrator.example.com"}/docs`} target="_blank" rel="noreferrer">
+          <a className="command-button h-9" href={`${PUBLIC_ORCHESTRATOR_URL}/docs`} target="_blank" rel="noreferrer">
             <ExternalLink size={15} />
             Open FastAPI docs
           </a>
@@ -1114,6 +1212,7 @@ function ApiDocs({ selectedType }: { selectedType: GenerationType }) {
           <p className="mt-2 text-sm text-slate-600">Use the localhost path from this admin app, or call the orchestrator directly from your backend.</p>
           <div className="mt-3 grid gap-2">
             <CodeLine label="Admin proxy" value={path} />
+            <CodeLine label="Public admin proxy" value={publicProxyPath} />
             <CodeLine label="Direct API" value={directPath} />
           </div>
           <div className="mt-3 flex items-center justify-between gap-2">
@@ -1131,6 +1230,7 @@ function ApiDocs({ selectedType }: { selectedType: GenerationType }) {
           <p className="mt-2 text-sm text-slate-600">Poll this endpoint until the job reaches `COMPLETED`, `FAILED`, or `TIMEOUT`.</p>
           <div className="mt-3 grid gap-2">
             <CodeLine label="Admin proxy" value={statusPath} />
+            <CodeLine label="Public admin proxy" value={publicStatusPath} />
             <CodeLine label="Direct API" value={directStatusPath} />
           </div>
           <div className="mt-3 flex items-center justify-between gap-2">
@@ -1167,6 +1267,7 @@ function ApiDocs({ selectedType }: { selectedType: GenerationType }) {
             <DocRow name="eta_seconds" value="estimated seconds until done" />
             <DocRow name="elapsed_seconds" value="total time since API received" />
             <DocRow name="message" value="safe user-facing status text" />
+            <DocRow name="aspect_ratio" value="16:9, 9:16, or 1:1" />
           </div>
         </div>
 
@@ -1194,6 +1295,19 @@ function ApiDocs({ selectedType }: { selectedType: GenerationType }) {
       </div>
 
       <div className="grid gap-3 xl:grid-cols-2">
+        <div className="rounded-lg border border-slate-200 bg-white p-4">
+          <div className="text-sm font-semibold">Image Input Contract</div>
+          <p className="mt-2 text-sm leading-6 text-slate-600">
+            `image_to_image` and `image_to_video` require an input image. Send one of these inside `inputs`. `caption` is the edit/reference instruction shown to the worker.
+          </p>
+          <div className="mt-3 grid gap-2 text-sm text-slate-600">
+            <DocRow name="inputs.image_url" value="public HTTPS image URL" />
+            <DocRow name="inputs.image_data_url" value="data:image/png;base64,... for admin/internal tests" />
+            <DocRow name="inputs.image_media_id" value="existing Google Flow media UUID" />
+            <DocRow name="caption" value="what to preserve/change from the input" />
+          </div>
+        </div>
+
         <div className="rounded-lg border border-slate-200 bg-white p-4">
           <div className="text-sm font-semibold">Job States</div>
           <div className="mt-3 grid gap-2 text-sm text-slate-600">
