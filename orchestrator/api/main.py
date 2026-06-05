@@ -752,7 +752,10 @@ async def enqueue_generation(generation_type: GenerationType, payload: Generatio
     )
     job.stamp("api_received")
     job.stamp("global_queued")
-    await state().queue.enqueue(job)
+    try:
+        await state().queue.enqueue(job)
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"global queue unavailable: {exc}") from exc
     await state().store.save_job(job)
     return job
 

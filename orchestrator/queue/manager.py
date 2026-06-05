@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import time
+import logging
 
 from redis.asyncio import Redis
 
 from orchestrator.config.settings import QueueSettings
 from orchestrator.queue.models import GlobalJob, JobState
+
+logger = logging.getLogger(__name__)
 
 
 class GlobalQueue:
@@ -18,6 +21,7 @@ class GlobalQueue:
         self.active_key = f"{settings.name}:active"
         self.jobs_key = f"{settings.name}:jobs"
         self.job_ids_key = f"{settings.name}:job_ids"
+        self.connect_error: str | None = None
 
     async def connect(self) -> None:
         if not self.redis_url or self.redis_url.startswith("${"):
@@ -28,7 +32,12 @@ class GlobalQueue:
             max_connections=4,
             socket_keepalive=True,
         )
-        await self.redis.ping()
+        try:
+            await self.redis.ping()
+            self.connect_error = None
+        except Exception as exc:
+            self.connect_error = str(exc)
+            logger.warning("Redis unavailable during startup; queue will retry on demand: %s", exc)
 
     async def close(self) -> None:
         if self.redis is not None:
@@ -105,13 +114,28 @@ class GlobalQueue:
 
     async def stats(self) -> dict:
         assert self.redis is not None
-        await self.cleanup_active()
-        return {
-            "ready": await self.redis.llen(self.ready_key),
-            "delayed": await self.redis.zcard(self.delayed_key),
-            "active": await self.redis.hlen(self.active_key),
-            "total_jobs": await self.redis.zcard(self.job_ids_key),
-        }
+        try:
+            await self.cleanup_active()
+            stats = {
+                "ready": await self.redis.llen(self.ready_key),
+                "delayed": await self.redis.zcard(self.delayed_key),
+                "active": await self.redis.hlen(self.active_key),
+                "total_jobs": await self.redis.zcard(self.job_ids_key),
+                "available": True,
+                "error": None,
+            }
+            self.connect_error = None
+            return stats
+        except Exception as exc:
+            self.connect_error = str(exc)
+            return {
+                "ready": 0,
+                "delayed": 0,
+                "active": 0,
+                "total_jobs": 0,
+                "available": False,
+                "error": str(exc),
+            }
 
     async def cleanup_active(self) -> int:
         assert self.redis is not None
