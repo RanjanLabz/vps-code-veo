@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import time
+from datetime import datetime, timezone
 
 from redis.asyncio import Redis
 
@@ -133,7 +134,8 @@ class QueueManager:
             except Exception:
                 stale_ids.append(job_id)
                 continue
-            if job.state not in valid_active_states:
+            active_age_seconds = (datetime.now(timezone.utc) - job.created_at).total_seconds()
+            if job.state not in valid_active_states or active_age_seconds > self.settings.job_timeout_seconds:
                 stale_ids.append(job_id)
         if stale_ids:
             await self.redis.hdel(self.active_key, *stale_ids)
