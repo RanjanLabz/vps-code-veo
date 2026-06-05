@@ -207,6 +207,21 @@ class AccountManager:
         account.mark_updated()
         await self.store.save(account)
 
+    async def refresh_flowkit_auth_states(self) -> None:
+        for account in self._accounts.values():
+            if account.status not in {AccountStatus.TOKEN_EXPIRED, AccountStatus.BROKEN_SESSION}:
+                continue
+            flowkit_status = self.flowkit.status(account.id)
+            if (
+                self._browser_is_running(account)
+                and flowkit_status.get("connected")
+                and flowkit_status.get("flow_key_present")
+            ):
+                account.status = AccountStatus.READY
+                account.health_score = max(20, account.health_score)
+                account.mark_updated()
+                await self.store.save(account)
+
     async def shutdown(self) -> None:
         for runtime in list(self._runtimes.values()):
             await runtime.terminate()

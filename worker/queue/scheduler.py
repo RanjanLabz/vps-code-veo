@@ -47,9 +47,11 @@ class Scheduler:
                 if job is None:
                     await asyncio.sleep(self.settings.queue.scheduler_interval_seconds)
                     continue
+                await self.accounts.refresh_flowkit_auth_states()
                 account = self._select_account(job)
                 if account is None:
                     job.stamp("local_waiting_for_account")
+                    job.last_error = self._no_account_reason()
                     await self.queue.requeue(job, delay_seconds=3)
                     await asyncio.sleep(self.settings.queue.scheduler_interval_seconds)
                     continue
@@ -94,6 +96,25 @@ class Scheduler:
         selected = candidates[0][1]
         self._last_selected_account_id = selected.id
         return selected
+
+    def _no_account_reason(self) -> str:
+        accounts = self.accounts.list_accounts()
+        if not accounts:
+            return "No accounts configured on this VPS"
+        reasons = []
+        now = datetime.now(timezone.utc)
+        for account in accounts:
+            if account.status not in {AccountStatus.READY, AccountStatus.BUSY, AccountStatus.COOLDOWN}:
+                reasons.append(f"{account.id}: status {account.status.value}")
+                continue
+            if account.settings.cooldown_until and account.settings.cooldown_until > now:
+                reasons.append(f"{account.id}: cooldown until {account.settings.cooldown_until.isoformat()}")
+                continue
+            if account.jobs_running >= account.settings.max_concurrent_jobs:
+                reasons.append(f"{account.id}: max concurrent jobs reached")
+                continue
+            reasons.append(f"{account.id}: not selected")
+        return "No eligible account: " + " | ".join(reasons)
 
     def _is_eligible(self, account: Account, now: datetime) -> bool:
         if account.status not in {AccountStatus.READY, AccountStatus.BUSY, AccountStatus.COOLDOWN}:
