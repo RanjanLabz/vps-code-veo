@@ -78,6 +78,8 @@ async def security_middleware(request: Request, call_next):
     path = request.url.path
     if is_public_path(path, settings.security.allow_public_health, settings.security.allow_public_docs):
         return await call_next(request)
+    if is_local_flowkit_callback(request):
+        return await call_next(request)
     if not settings.security.api_key:
         return JSONResponse({"detail": "WORKER_API_KEY is required before exposing this service"}, status_code=503)
     provided = request.headers.get("x-api-key") or bearer_token(request.headers.get("authorization"))
@@ -94,6 +96,14 @@ def is_public_path(path: str, allow_public_health: bool, allow_public_docs: bool
     if allow_public_docs and path in {"/docs", "/redoc", "/openapi.json"}:
         return True
     return False
+
+
+def is_local_flowkit_callback(request: Request) -> bool:
+    path = request.url.path
+    if not (path.startswith("/flowkit/") and path.endswith("/callback")):
+        return False
+    client_host = request.client.host if request.client else ""
+    return client_host in {"127.0.0.1", "::1", "localhost"}
 
 
 def bearer_token(value: str | None) -> str | None:
