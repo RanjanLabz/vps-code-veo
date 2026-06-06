@@ -71,8 +71,9 @@ class R2ImageStore:
         )
 
     def _image_url(self, key: str) -> str:
-        if self.settings.r2_public_base_url:
-            return f"{self.settings.r2_public_base_url.rstrip('/')}/{key}"
+        public_base_url = (self.settings.r2_public_base_url or "").strip()
+        if public_base_url and not public_base_url.startswith("${"):
+            return f"{public_base_url.rstrip('/')}/{key}"
         return self._s3().generate_presigned_url(
             "get_object",
             Params={"Bucket": self.settings.r2_bucket, "Key": key},
