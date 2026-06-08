@@ -104,7 +104,10 @@ class Scheduler:
         reasons = []
         now = datetime.now(timezone.utc)
         for account in accounts:
-            if account.status not in {AccountStatus.READY, AccountStatus.BUSY, AccountStatus.COOLDOWN}:
+            if not account.settings.enabled:
+                reasons.append(f"{account.id}: disabled")
+                continue
+            if account.status not in {AccountStatus.READY, AccountStatus.BUSY, AccountStatus.COOLDOWN, AccountStatus.STOPPED}:
                 reasons.append(f"{account.id}: status {account.status.value}")
                 continue
             if account.settings.cooldown_until and account.settings.cooldown_until > now:
@@ -117,7 +120,9 @@ class Scheduler:
         return "No eligible account: " + " | ".join(reasons)
 
     def _is_eligible(self, account: Account, now: datetime) -> bool:
-        if account.status not in {AccountStatus.READY, AccountStatus.BUSY, AccountStatus.COOLDOWN}:
+        if not account.settings.enabled:
+            return False
+        if account.status not in {AccountStatus.READY, AccountStatus.BUSY, AccountStatus.COOLDOWN, AccountStatus.STOPPED}:
             return False
         if account.settings.cooldown_until and account.settings.cooldown_until > now:
             return False

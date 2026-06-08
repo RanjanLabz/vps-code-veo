@@ -23,8 +23,11 @@ class AccountStatus(StrEnum):
 
 
 class AccountSettings(BaseModel):
+    enabled: bool = True
     flow_url: str | None = None
     max_concurrent_jobs: int = Field(default=1, ge=1)
+    keep_warm: bool = False
+    fleet_extension_enabled: bool = True
     cooldown_until: datetime | None = None
     tags: list[str] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)

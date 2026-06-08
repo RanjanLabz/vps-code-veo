@@ -49,6 +49,8 @@ class AccountManager:
             await self.store.save(account)
         if self.settings.autostart_accounts:
             for account in list(self._accounts.values()):
+                if not account.settings.keep_warm:
+                    continue
                 try:
                     await self.start_account(account.id)
                 except Exception:
@@ -176,11 +178,20 @@ class AccountManager:
 
     async def update_settings(self, account_id: str, payload: dict[str, Any]) -> Account:
         account = self._require(account_id)
+        was_running = self._browser_is_running(account)
+        fleet_extension_enabled = account.settings.fleet_extension_enabled
+        keep_warm = account.settings.keep_warm
         current = account.settings.model_dump()
         current.update(payload)
         account.settings = AccountSettings.model_validate(current)
         account.mark_updated()
         await self.store.save(account)
+        if was_running and account.settings.fleet_extension_enabled != fleet_extension_enabled:
+            return await self.restart_account(account_id)
+        if was_running and not account.settings.keep_warm and keep_warm != account.settings.keep_warm and account.jobs_running == 0:
+            return await self.stop_account(account_id)
+        if not was_running and account.settings.keep_warm and keep_warm != account.settings.keep_warm:
+            return await self.start_account(account_id)
         return account
 
     async def mark_job_started(self, account_id: str) -> None:

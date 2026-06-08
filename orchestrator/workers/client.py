@@ -150,9 +150,11 @@ class WorkerClient:
         available = 0
         for account in accounts:
             status = account.get("status")
-            if status not in {"READY", "BUSY", "COOLDOWN"}:
-                continue
             settings = account.get("settings") if isinstance(account.get("settings"), dict) else {}
+            if settings.get("enabled") is False:
+                continue
+            if status not in {"READY", "BUSY", "COOLDOWN", "STOPPED"}:
+                continue
             max_jobs = int(settings.get("max_concurrent_jobs") or 1)
             running = int(account.get("jobs_running") or 0)
             available += max(0, max_jobs - running)

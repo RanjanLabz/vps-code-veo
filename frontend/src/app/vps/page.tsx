@@ -70,7 +70,10 @@ type Account = {
   vnc_web_url?: string | null;
   flowkit_ws_port?: number | null;
   settings?: {
+    enabled?: boolean;
     max_concurrent_jobs?: number;
+    keep_warm?: boolean;
+    fleet_extension_enabled?: boolean;
     tags?: string[];
   };
 };
@@ -188,11 +191,16 @@ function VpsPageContent() {
     );
   }
 
-  async function updateAccount(account: Account, patch: { maxConcurrentJobs: number; proxyEnabled: boolean; proxyUrl: string }) {
+  async function updateAccount(account: Account, patch: { enabled: boolean; keepWarm: boolean; fleetExtensionEnabled: boolean; maxConcurrentJobs: number; proxyEnabled: boolean; proxyUrl: string }) {
     await run("Account updated", async () => {
       await api(`/workers/${encodeURIComponent(vpsId)}/accounts/${encodeURIComponent(account.id)}/settings`, {
         method: "PATCH",
-        body: JSON.stringify({ max_concurrent_jobs: patch.maxConcurrentJobs }),
+        body: JSON.stringify({
+          enabled: patch.enabled,
+          keep_warm: patch.keepWarm,
+          fleet_extension_enabled: patch.fleetExtensionEnabled,
+          max_concurrent_jobs: patch.maxConcurrentJobs,
+        }),
       });
       await api(`/workers/${encodeURIComponent(vpsId)}/accounts/${encodeURIComponent(account.id)}/proxy`, {
         method: "PATCH",
@@ -329,9 +337,12 @@ function AccountCard({
   busy: boolean;
   onAction: (action: "start" | "stop" | "restart" | "recover") => void;
   onDelete: () => void;
-  onSave: (patch: { maxConcurrentJobs: number; proxyEnabled: boolean; proxyUrl: string }) => void;
+  onSave: (patch: { enabled: boolean; keepWarm: boolean; fleetExtensionEnabled: boolean; maxConcurrentJobs: number; proxyEnabled: boolean; proxyUrl: string }) => void;
 }) {
   const [editing, setEditing] = useState(false);
+  const [enabled, setEnabled] = useState(account.settings?.enabled ?? true);
+  const [keepWarm, setKeepWarm] = useState(account.settings?.keep_warm ?? false);
+  const [fleetExtensionEnabled, setFleetExtensionEnabled] = useState(account.settings?.fleet_extension_enabled ?? true);
   const [maxConcurrentJobs, setMaxConcurrentJobs] = useState(account.settings?.max_concurrent_jobs ?? 1);
   const [proxyEnabled, setProxyEnabled] = useState(Boolean(account.proxy_enabled));
   const [proxyUrl, setProxyUrl] = useState(account.proxy_url || "");
@@ -348,6 +359,8 @@ function AccountCard({
           <div className="flex flex-wrap items-center gap-2">
             <span className="break-all font-semibold">{account.id}</span>
             <span className={cls("rounded-md px-2 py-1 text-xs font-medium", account.status === "READY" ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700")}>{account.status}</span>
+            <span className={cls("rounded-md px-2 py-1 text-xs font-medium", account.settings?.enabled === false ? "bg-slate-100 text-slate-500" : "bg-emerald-50 text-emerald-700")}>{account.settings?.enabled === false ? "disabled" : "enabled"}</span>
+            <span className={cls("rounded-md px-2 py-1 text-xs font-medium", account.settings?.fleet_extension_enabled === false ? "bg-slate-100 text-slate-500" : "bg-violet-50 text-violet-700")}>Fleet ext {account.settings?.fleet_extension_enabled === false ? "off" : "on"}</span>
             <span className={cls("rounded-md px-2 py-1 text-xs font-medium", runtime.flowkit?.connected ? "bg-blue-50 text-blue-700" : "bg-slate-100 text-slate-600")}>FlowKit {runtime.flowkit?.connected ? "connected" : "unknown"}</span>
             {runtime.auth_required && <span className="rounded-md bg-red-50 px-2 py-1 text-xs font-medium text-red-700">login needed</span>}
           </div>
@@ -382,6 +395,27 @@ function AccountCard({
             </Field>
           </div>
           <label className="flex items-center justify-between rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm">
+            <span>
+              <span className="block font-medium text-slate-700">Account enabled</span>
+              <span className="text-xs text-slate-500">Disabled accounts are skipped by the scheduler.</span>
+            </span>
+            <input type="checkbox" checked={enabled} onChange={(event) => setEnabled(event.target.checked)} />
+          </label>
+          <label className="flex items-center justify-between rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm">
+            <span>
+              <span className="block font-medium text-slate-700">Keep Chrome warm</span>
+              <span className="text-xs text-slate-500">Off saves CPU/RAM. The scheduler starts this profile only when needed.</span>
+            </span>
+            <input type="checkbox" checked={keepWarm} onChange={(event) => setKeepWarm(event.target.checked)} />
+          </label>
+          <label className="flex items-center justify-between rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm">
+            <span>
+              <span className="block font-medium text-slate-700">Fleet extension enabled</span>
+              <span className="text-xs text-slate-500">FlowKit bridge always stays on; this toggles the uploaded extra extension.</span>
+            </span>
+            <input type="checkbox" checked={fleetExtensionEnabled} onChange={(event) => setFleetExtensionEnabled(event.target.checked)} />
+          </label>
+          <label className="flex items-center justify-between rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm">
             <span className="font-medium text-slate-700">Proxy enabled</span>
             <input type="checkbox" checked={proxyEnabled} onChange={(event) => setProxyEnabled(event.target.checked)} />
           </label>
@@ -391,7 +425,7 @@ function AccountCard({
               className="primary-button"
               disabled={busy}
               onClick={() => {
-                onSave({ maxConcurrentJobs, proxyEnabled, proxyUrl });
+                onSave({ enabled, keepWarm, fleetExtensionEnabled, maxConcurrentJobs, proxyEnabled, proxyUrl });
                 setEditing(false);
               }}
             >
@@ -402,6 +436,9 @@ function AccountCard({
               className="command-button"
               disabled={busy}
               onClick={() => {
+                setEnabled(account.settings?.enabled ?? true);
+                setKeepWarm(account.settings?.keep_warm ?? false);
+                setFleetExtensionEnabled(account.settings?.fleet_extension_enabled ?? true);
                 setMaxConcurrentJobs(account.settings?.max_concurrent_jobs ?? 1);
                 setProxyEnabled(Boolean(account.proxy_enabled));
                 setProxyUrl(account.proxy_url || "");

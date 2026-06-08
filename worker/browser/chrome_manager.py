@@ -109,8 +109,9 @@ class ChromeManager:
         if (flowkit_dir / "manifest.json").exists():
             dirs.append(flowkit_dir)
 
-        fleet_dir = self.settings.paths.fleet_extensions_dir / "current"
-        if (fleet_dir / "manifest.json").exists():
-            dirs.append(fleet_dir)
+        if account.settings.fleet_extension_enabled:
+            fleet_dir = self.settings.paths.fleet_extensions_dir / "current"
+            if (fleet_dir / "manifest.json").exists():
+                dirs.append(fleet_dir)
 
         return dirs
