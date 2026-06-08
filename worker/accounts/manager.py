@@ -244,10 +244,11 @@ class AccountManager:
             target = self.settings.paths.extension_dir
             backup = target.with_name(f"{target.name}.backup")
             shutil.rmtree(backup, ignore_errors=True)
+            target.mkdir(parents=True, exist_ok=True)
             if target.exists():
                 shutil.copytree(target, backup)
-                shutil.rmtree(target)
-            shutil.copytree(extension_root, target)
+                self._clear_directory_contents(target)
+            self._copy_directory_contents(extension_root, target)
             shutil.rmtree(backup, ignore_errors=True)
             cleanup_root = extension_root.parent.parent if extension_root.parent.name == "extract" else extension_root.parent
             shutil.rmtree(cleanup_root, ignore_errors=True)
@@ -307,6 +308,21 @@ class AccountManager:
         except Exception:
             shutil.rmtree(temp_root, ignore_errors=True)
             raise
+
+    def _clear_directory_contents(self, path: Path) -> None:
+        for child in path.iterdir():
+            if child.is_dir() and not child.is_symlink():
+                shutil.rmtree(child)
+            else:
+                child.unlink()
+
+    def _copy_directory_contents(self, source: Path, target: Path) -> None:
+        for child in source.iterdir():
+            destination = target / child.name
+            if child.is_dir() and not child.is_symlink():
+                shutil.copytree(child, destination)
+            else:
+                shutil.copy2(child, destination)
 
     def _require(self, account_id: str) -> Account:
         account = self._accounts.get(account_id)
