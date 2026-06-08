@@ -58,6 +58,8 @@ class HealthReporter:
                 "path": str(self.settings.paths.extension_dir),
                 "manifest_present": (self.settings.paths.extension_dir / "manifest.json").exists(),
                 "flowkit_runtime_dir": str(self.settings.paths.runtime_extension_dir),
+                "fleet_current_dir": str(self.settings.paths.fleet_extensions_dir / "current"),
+                "fleet_manifest_present": ((self.settings.paths.fleet_extensions_dir / "current") / "manifest.json").exists(),
             },
             "queue": queue_stats,
         }

@@ -36,9 +36,10 @@ class ChromeManager:
             "--disable-features=Translate,AutomationControlled",
             "--start-maximized",
         ]
-        extension_dir = Path(account.extension_runtime_path) if account.extension_runtime_path else self.settings.paths.extension_dir
-        if (extension_dir / "manifest.json").exists():
-            args.extend([f"--disable-extensions-except={extension_dir}", f"--load-extension={extension_dir}"])
+        extension_dirs = self._extension_dirs(account)
+        if extension_dirs:
+            extension_arg = ",".join(str(path) for path in extension_dirs)
+            args.extend([f"--disable-extensions-except={extension_arg}", f"--load-extension={extension_arg}"])
         if account.proxy_enabled and account.proxy_url:
             args.append(f"--proxy-server={account.proxy_url}")
         args.extend(self.settings.browser.extra_args)
@@ -101,3 +102,15 @@ class ChromeManager:
         digits = "".join(ch for ch in account.id if ch.isdigit())
         offset = int(digits) if digits else abs(hash(account.id)) % 500
         return self.settings.browser.remote_debugging_start_port + offset
+
+    def _extension_dirs(self, account: Account) -> list[Path]:
+        dirs: list[Path] = []
+        flowkit_dir = Path(account.extension_runtime_path) if account.extension_runtime_path else self.settings.paths.extension_dir
+        if (flowkit_dir / "manifest.json").exists():
+            dirs.append(flowkit_dir)
+
+        fleet_dir = self.settings.paths.fleet_extensions_dir / "current"
+        if (fleet_dir / "manifest.json").exists():
+            dirs.append(fleet_dir)
+
+        return dirs

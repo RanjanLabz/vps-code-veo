@@ -241,11 +241,11 @@ class AccountManager:
         running_accounts = [account.id for account in self.list_accounts() if self._browser_is_running(account)]
 
         async with self._lock:
-            target = self.settings.paths.extension_dir
+            target = self.settings.paths.fleet_extensions_dir / "current"
             backup = target.with_name(f"{target.name}.backup")
             shutil.rmtree(backup, ignore_errors=True)
             target.mkdir(parents=True, exist_ok=True)
-            if target.exists():
+            if any(target.iterdir()):
                 shutil.copytree(target, backup)
                 self._clear_directory_contents(target)
             self._copy_directory_contents(extension_root, target)
@@ -267,11 +267,12 @@ class AccountManager:
         return {
             "installed": True,
             "version": version,
-            "extension_dir": str(self.settings.paths.extension_dir),
+            "extension_dir": str(target),
+            "base_flowkit_extension_dir": str(self.settings.paths.extension_dir),
             "running_accounts_before_install": running_accounts,
             "restarted_accounts": restarted,
             "failed_accounts": failed,
-            "future_accounts": "will use this extension automatically",
+            "future_accounts": "will load this extension next to the FlowKit bridge automatically",
         }
 
     async def _download_extension_archive(self, extension_url: str) -> bytes:

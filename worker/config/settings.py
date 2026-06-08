@@ -13,6 +13,7 @@ class PathSettings(BaseModel):
     chrome_profiles_dir: Path = Path("/chrome-profiles")
     extension_dir: Path = Path("/extension")
     runtime_extension_dir: Path = Path("/tmp/flow-worker-extensions")
+    fleet_extensions_dir: Path = Path("/chrome-profiles/_fleet-extensions")
     accounts_dir: Path = Path("/worker/accounts")
     logs_dir: Path = Path("/worker/logs")
 
@@ -83,6 +84,7 @@ class Settings(BaseModel):
             self.paths.chrome_profiles_dir,
             self.paths.extension_dir,
             self.paths.runtime_extension_dir,
+            self.paths.fleet_extensions_dir,
             self.paths.accounts_dir,
             self.paths.logs_dir,
         ]:
