@@ -124,6 +124,12 @@ class WorkerClient:
         response.raise_for_status()
         return dict(response.json())
 
+    async def media(self, worker: WorkerRecord, media_path: str, range_header: str | None = None) -> httpx.Response:
+        headers = self._headers()
+        if range_header:
+            headers["range"] = range_header
+        return await self._client.get(f"{worker.base_url.rstrip('/')}{media_path}", headers=headers)
+
     async def _request_with_retries(self, method: str, url: str, **kwargs: Any) -> httpx.Response:
         last_exc: Exception | None = None
         for attempt in range(1, self._retries + 1):

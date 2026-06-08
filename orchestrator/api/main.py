@@ -14,7 +14,7 @@ from typing import Any, AsyncIterator, Literal
 import zipfile
 
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
 
 from orchestrator.capacity.manager import CapacityManager
@@ -592,6 +592,39 @@ async def get_job(job_id: str) -> dict:
     if job is None:
         raise HTTPException(status_code=404, detail="job not found")
     return await enriched_job(job)
+
+
+@app.get("/media/videos/{filename}")
+async def proxy_worker_video(filename: str, request: Request) -> Response:
+    if "/" in filename or "\\" in filename or not filename.lower().endswith(".mp4"):
+        raise HTTPException(status_code=400, detail="invalid media filename")
+    media_path = f"/media/videos/{filename}"
+    last_status: int | None = None
+    for worker in state().workers.list_workers():
+        if not worker.enabled:
+            continue
+        response = await state().worker_client.media(worker, media_path, request.headers.get("range"))
+        last_status = response.status_code
+        if response.status_code == 404:
+            continue
+        if response.status_code not in {200, 206}:
+            continue
+        headers = media_response_headers(response.headers, filename)
+        return Response(content=response.content, status_code=response.status_code, media_type="video/mp4", headers=headers)
+    raise HTTPException(status_code=404 if last_status in {None, 404} else 502, detail="video not found on registered workers")
+
+
+def media_response_headers(source: Any, filename: str) -> dict[str, str]:
+    headers: dict[str, str] = {
+        "content-type": "video/mp4",
+        "content-disposition": f'inline; filename="{filename}"',
+        "cache-control": "private, max-age=3600",
+    }
+    for key in ["accept-ranges", "content-range", "content-length", "etag", "last-modified"]:
+        value = source.get(key)
+        if value:
+            headers[key] = value
+    return headers
 
 
 async def enriched_job(job: GlobalJob) -> dict:
