@@ -32,6 +32,12 @@ class GenerationRequest(BaseModel):
     metadata: dict | None = None
 
 
+class ExtensionInstallRequest(BaseModel):
+    extension_url: str = Field(min_length=1)
+    version: str | None = None
+    restart_accounts: bool = True
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = load_settings()
@@ -254,6 +260,15 @@ async def patch_proxy(request: Request, account_id: str, payload: dict) -> dict:
 async def patch_settings(request: Request, account_id: str, payload: dict) -> dict:
     account = await state().accounts.update_settings(account_id, payload)
     return account_response(request, account)
+
+
+@app.post("/extensions/install")
+async def install_extension(payload: ExtensionInstallRequest) -> dict:
+    return await state().accounts.install_extension_package(
+        payload.extension_url,
+        version=payload.version,
+        restart_accounts=payload.restart_accounts,
+    )
 
 
 @app.post("/jobs", status_code=201)

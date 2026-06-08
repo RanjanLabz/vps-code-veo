@@ -27,6 +27,7 @@ import {
   Server,
   Settings2,
   Trash2,
+  Upload,
   Users,
 } from "lucide-react";
 import Link from "next/link";
@@ -223,6 +224,18 @@ type AdminUser = {
   super_admin?: boolean;
   last_seen_at?: string;
   updated_at?: string;
+};
+
+type ExtensionPackage = {
+  installed?: boolean;
+  version?: string;
+  file_name?: string;
+  manifest_path?: string;
+  sha256?: string;
+  storage_key?: string;
+  size_bytes?: number;
+  uploaded_at?: string;
+  worker_results?: Array<{ worker_id: string; ok: boolean; error?: string; result?: Record<string, unknown> }>;
 };
 
 const API = "/api/orchestrator";
@@ -509,6 +522,7 @@ export default function Home() {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [metrics, setMetrics] = useState<Metrics | null>(null);
   const [flowSettings, setFlowSettings] = useState<FlowSettings>(EMPTY_SETTINGS);
+  const [extensionPackage, setExtensionPackage] = useState<ExtensionPackage | null>(null);
   const [modelCatalog, setModelCatalog] = useState<ModelCatalog>({
     text_to_image: [],
     image_to_image: [],
@@ -536,6 +550,8 @@ export default function Home() {
   const [imageMediaId, setImageMediaId] = useState("");
   const [preferredWorkerId, setPreferredWorkerId] = useState("");
   const [preferredAccountId, setPreferredAccountId] = useState("");
+  const [extensionFile, setExtensionFile] = useState<File | null>(null);
+  const [restartAccountsAfterExtension, setRestartAccountsAfterExtension] = useState(true);
   const [resetPasswords, setResetPasswords] = useState<Record<string, string>>({});
 
   const selectedGlobalSetting = flowSettings[generationType] || {};
@@ -566,13 +582,14 @@ export default function Home() {
   async function refresh(silent = false) {
     if (!silent) setBusy("Refreshing");
     try {
-      const [nextWorkers, nextJobs, nextSettings, nextMetrics, nextCatalog, nextAdminUsers] = await Promise.all([
+      const [nextWorkers, nextJobs, nextSettings, nextMetrics, nextCatalog, nextAdminUsers, nextExtension] = await Promise.all([
         api<Worker[]>("/workers"),
         api<Job[]>("/jobs?limit=50"),
         api<FlowSettings>("/flow-settings"),
         api<Metrics>("/metrics"),
         api<ModelCatalog>("/flow-models"),
         adminApi<{ users: AdminUser[] }>("/access").then((value) => value.users).catch(() => []),
+        api<ExtensionPackage>("/extensions/current").catch(() => ({ installed: false })),
       ]);
       setWorkers(nextWorkers);
       setJobs(nextJobs);
@@ -580,6 +597,7 @@ export default function Home() {
       setModelCatalog(nextCatalog);
       setMetrics(nextMetrics);
       setAdminUsers(nextAdminUsers);
+      setExtensionPackage(nextExtension);
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to load orchestrator");
@@ -656,6 +674,40 @@ export default function Home() {
 
   async function deleteWorker(worker: Worker) {
     await run("VPS removed", () => api(`/workers/${encodeURIComponent(worker.id)}`, { method: "DELETE" }));
+  }
+
+  async function uploadExtension(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!extensionFile) {
+      setError("Choose a Chrome extension ZIP first.");
+      return;
+    }
+    if (!extensionFile.name.toLowerCase().endsWith(".zip")) {
+      setError("Extension upload must be a .zip file.");
+      return;
+    }
+    const zipDataUrl = await fileToDataUrl(extensionFile);
+    await run("Extension installed", () =>
+      api<ExtensionPackage>("/extensions/upload", {
+        method: "POST",
+        body: JSON.stringify({
+          file_name: extensionFile.name,
+          zip_data_url: zipDataUrl,
+          apply_to_workers: true,
+          restart_accounts: restartAccountsAfterExtension,
+        }),
+      }),
+    );
+    setExtensionFile(null);
+  }
+
+  async function applyCurrentExtension() {
+    await run("Extension applied", () =>
+      api("/extensions/apply-current", {
+        method: "POST",
+        body: JSON.stringify({ restart_accounts: restartAccountsAfterExtension }),
+      }),
+    );
   }
 
   async function submitGeneration(event: FormEvent<HTMLFormElement>) {
@@ -788,6 +840,59 @@ export default function Home() {
                   {busy === "VPS saved" ? <Loader2 size={17} className="animate-spin" /> : <Plus size={17} />}
                   Save VPS node
                 </button>
+              </form>
+            </Panel>
+
+            <Panel title="Fleet Extension">
+              <form className="grid gap-3" onSubmit={uploadExtension}>
+                <div className="rounded-lg border border-slate-200 bg-white p-3 text-sm text-slate-600">
+                  Upload a FlowKit-compatible Chrome extension ZIP once. The orchestrator stores it centrally, then installs it on all enabled VPS workers for existing and future Chrome profiles.
+                </div>
+                <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                  <div className="text-xs font-semibold uppercase text-slate-400">Current package</div>
+                  {extensionPackage?.installed ? (
+                    <div className="mt-1 grid gap-1 text-sm">
+                      <div className="break-all font-semibold text-slate-950">{extensionPackage.file_name || extensionPackage.version}</div>
+                      <div className="text-xs text-slate-500">
+                        {extensionPackage.version} | {extensionPackage.size_bytes ? `${(extensionPackage.size_bytes / 1024 / 1024).toFixed(2)} MB` : "size unknown"}
+                      </div>
+                      <div className="text-xs text-slate-500">Manifest: {extensionPackage.manifest_path || "manifest.json"}</div>
+                    </div>
+                  ) : (
+                    <div className="mt-1 text-sm text-slate-500">No fleet extension package uploaded yet.</div>
+                  )}
+                </div>
+                <Field label="Extension ZIP">
+                  <input
+                    className="input file:mr-3 file:rounded-md file:border-0 file:bg-slate-950 file:px-3 file:py-1.5 file:text-sm file:font-semibold file:text-white"
+                    type="file"
+                    accept=".zip,application/zip,application/x-zip-compressed"
+                    onChange={(event) => setExtensionFile(event.target.files?.[0] || null)}
+                  />
+                </Field>
+                {extensionFile && (
+                  <div className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600">
+                    <span className="truncate">{extensionFile.name} | {(extensionFile.size / 1024 / 1024).toFixed(2)} MB</span>
+                    <button type="button" className="text-red-600" onClick={() => setExtensionFile(null)}>Remove</button>
+                  </div>
+                )}
+                <label className="flex items-center justify-between rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm">
+                  <span className="font-medium text-slate-700">Restart running Chrome accounts after install</span>
+                  <input type="checkbox" checked={restartAccountsAfterExtension} onChange={(event) => setRestartAccountsAfterExtension(event.target.checked)} />
+                </label>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <button className="primary-button" disabled={Boolean(busy) || !extensionFile}>
+                    {busy === "Extension installed" ? <Loader2 size={17} className="animate-spin" /> : <Upload size={17} />}
+                    Upload and install
+                  </button>
+                  <button type="button" className="command-button h-11 justify-center" disabled={Boolean(busy) || !extensionPackage?.installed} onClick={applyCurrentExtension}>
+                    {busy === "Extension applied" ? <Loader2 size={17} className="animate-spin" /> : <RefreshCcw size={17} />}
+                    Reapply current
+                  </button>
+                </div>
+                <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-900">
+                  Restarting accounts reloads the extension but keeps Chrome profile data/cookies. If Google shows a login challenge after restart, open VNC and complete it once.
+                </div>
               </form>
             </Panel>
 
@@ -1263,6 +1368,18 @@ function ApiDocs({ selectedType }: { selectedType: GenerationType }) {
           body="This is the main response for your app UI. Use `progress`, `routing_status`, `live_worker_job`, and `output_urls`."
           code={progressResponse}
         />
+      </div>
+
+      <div className="rounded-lg border border-slate-200 bg-white p-4">
+        <div className="text-sm font-semibold">Fleet Extension Management</div>
+        <p className="mt-2 text-sm leading-6 text-slate-600">
+          Upload a FlowKit-compatible Chrome extension ZIP from the admin panel to install it across all enabled VPS workers. Existing accounts are restarted only when the restart option is enabled. Future VPS accounts use the installed `/extension` automatically.
+        </p>
+        <div className="mt-3 grid gap-2 md:grid-cols-3">
+          <CodeLine label="Current package" value="/api/orchestrator/extensions/current" />
+          <CodeLine label="Upload ZIP" value="/api/orchestrator/extensions/upload" />
+          <CodeLine label="Reapply package" value="/api/orchestrator/extensions/apply-current" />
+        </div>
       </div>
 
       <div className="grid gap-3 xl:grid-cols-3">

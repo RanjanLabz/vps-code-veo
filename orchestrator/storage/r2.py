@@ -25,6 +25,14 @@ class StoredImage:
     size_bytes: int
 
 
+@dataclass(frozen=True)
+class StoredObject:
+    key: str
+    url: str
+    content_type: str
+    size_bytes: int
+
+
 class R2ImageStore:
     def __init__(self, settings: StorageSettings) -> None:
         self.settings = settings
@@ -60,6 +68,19 @@ class R2ImageStore:
             image_url=self._image_url(key),
             content_type=content_type,
             size_bytes=len(raw),
+        )
+
+    async def store_bytes(self, body: bytes, key: str, content_type: str) -> StoredObject:
+        if not self.configured:
+            raise RuntimeError("R2 storage is not configured")
+        if not body:
+            raise ValueError("object body is empty")
+        await asyncio.to_thread(self._put_object, key, body, content_type)
+        return StoredObject(
+            key=key,
+            url=self._image_url(key),
+            content_type=content_type,
+            size_bytes=len(body),
         )
 
     def _put_object(self, key: str, body: bytes, content_type: str) -> None:

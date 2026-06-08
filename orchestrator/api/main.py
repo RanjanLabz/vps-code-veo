@@ -1,11 +1,17 @@
 from __future__ import annotations
 
+import asyncio
+import base64
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
+import hashlib
+import io
+import json
 import os
 import secrets
 import time
 from typing import Any, AsyncIterator, Literal
+import zipfile
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
@@ -35,6 +41,13 @@ class GenerationRequest(BaseModel):
     preferred_worker_id: str | None = None
     preferred_account_id: str | None = None
     metadata: dict[str, Any] | None = None
+
+
+class ExtensionUploadRequest(BaseModel):
+    file_name: str = Field(min_length=1)
+    zip_data_url: str = Field(min_length=1)
+    apply_to_workers: bool = True
+    restart_accounts: bool = True
 
 
 @asynccontextmanager
@@ -396,6 +409,136 @@ async def update_worker_account_proxy(worker_id: str, account_id: str, payload: 
 async def delete_worker(worker_id: str) -> dict:
     await state().workers.delete(worker_id)
     return {"deleted": True, "id": worker_id}
+
+
+@app.get("/extensions/current")
+async def current_extension() -> dict:
+    assert state().queue.redis is not None
+    raw = await state().queue.redis.get(f"{state().settings.queue.name}:extension:current")
+    return json.loads(raw) if raw else {"installed": False}
+
+
+@app.post("/extensions/upload", status_code=201)
+async def upload_extension(payload: ExtensionUploadRequest) -> dict:
+    zip_bytes, content_type = decode_zip_data_url(payload.zip_data_url)
+    manifest_path = validate_extension_zip(zip_bytes)
+    digest = hashlib.sha256(zip_bytes).hexdigest()
+    version = f"{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}-{digest[:12]}"
+    safe_name = safe_zip_name(payload.file_name)
+    key = f"extensions/{version}-{safe_name}"
+    stored = await R2ImageStore(state().settings.storage).store_bytes(zip_bytes, key, content_type)
+    package = {
+        "installed": True,
+        "version": version,
+        "file_name": payload.file_name,
+        "manifest_path": manifest_path,
+        "sha256": digest,
+        "storage_key": stored.key,
+        "extension_url": stored.url,
+        "size_bytes": stored.size_bytes,
+        "uploaded_at": datetime.now(timezone.utc).isoformat(),
+    }
+    assert state().queue.redis is not None
+    await state().queue.redis.set(f"{state().settings.queue.name}:extension:current", json.dumps(package, separators=(",", ":")))
+
+    results: list[dict[str, Any]] = []
+    if payload.apply_to_workers:
+        workers = [worker for worker in state().workers.list_workers() if worker.enabled]
+        install_payload = {
+            "extension_url": stored.url,
+            "version": version,
+            "restart_accounts": payload.restart_accounts,
+        }
+        responses = await asyncio.gather(
+            *(install_extension_on_worker(worker, install_payload) for worker in workers),
+            return_exceptions=False,
+        )
+        results = responses
+        await state().workers.refresh_all()
+
+    return {**package, "apply_to_workers": payload.apply_to_workers, "restart_accounts": payload.restart_accounts, "worker_results": results}
+
+
+@app.post("/extensions/apply-current")
+async def apply_current_extension(payload: dict | None = None) -> dict:
+    current = await current_extension()
+    if not current.get("installed") or not current.get("extension_url"):
+        raise HTTPException(status_code=404, detail="no current extension package is available")
+    worker_id = (payload or {}).get("worker_id")
+    restart_accounts = bool((payload or {}).get("restart_accounts", True))
+    workers = state().workers.list_workers()
+    if worker_id:
+        worker = state().workers.get(str(worker_id))
+        if worker is None:
+            raise HTTPException(status_code=404, detail="worker not found")
+        workers = [worker]
+    else:
+        workers = [worker for worker in workers if worker.enabled]
+    install_payload = {
+        "extension_url": current["extension_url"],
+        "version": current.get("version"),
+        "restart_accounts": restart_accounts,
+    }
+    results = await asyncio.gather(
+        *(install_extension_on_worker(worker, install_payload) for worker in workers),
+        return_exceptions=False,
+    )
+    await state().workers.refresh_all()
+    return {"applied": True, "version": current.get("version"), "worker_results": results}
+
+
+async def install_extension_on_worker(worker, install_payload: dict[str, Any]) -> dict[str, Any]:
+    try:
+        result = await state().worker_client.install_extension(worker, install_payload)
+        return {"worker_id": worker.id, "ok": True, "result": result}
+    except Exception as exc:
+        return {"worker_id": worker.id, "ok": False, "error": str(exc)}
+
+
+def decode_zip_data_url(data_url: str) -> tuple[bytes, str]:
+    prefix, separator, encoded = data_url.partition(",")
+    if not separator or ";base64" not in prefix:
+        raise HTTPException(status_code=400, detail="zip_data_url must be a base64 data URL")
+    content_type = prefix.removeprefix("data:").split(";", 1)[0] or "application/zip"
+    if content_type not in {"application/zip", "application/x-zip-compressed", "application/octet-stream"}:
+        raise HTTPException(status_code=400, detail="extension upload must be a ZIP file")
+    try:
+        body = base64.b64decode(encoded, validate=True)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="invalid base64 ZIP data") from exc
+    if len(body) > 25 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="extension ZIP is larger than 25MB")
+    return body, content_type
+
+
+def validate_extension_zip(body: bytes) -> str:
+    try:
+        with zipfile.ZipFile(io.BytesIO(body)) as zip_file:
+            names = [item.filename for item in zip_file.infolist() if not item.is_dir()]
+            for name in names:
+                normalized = name.replace("\\", "/")
+                if normalized.startswith("/") or "../" in normalized or normalized == "..":
+                    raise HTTPException(status_code=400, detail=f"unsafe ZIP path: {name}")
+            manifests = [name for name in names if name.replace("\\", "/").endswith("manifest.json")]
+    except zipfile.BadZipFile as exc:
+        raise HTTPException(status_code=400, detail="uploaded file is not a valid ZIP") from exc
+    if "manifest.json" in manifests:
+        return "manifest.json"
+    top_level_manifests = [name for name in manifests if len(name.replace("\\", "/").split("/")) == 2]
+    if len(top_level_manifests) == 1:
+        return top_level_manifests[0]
+    raise HTTPException(status_code=400, detail="extension ZIP must contain manifest.json at root or inside one top-level folder")
+
+
+def safe_zip_name(file_name: str) -> str:
+    name = os.path.basename(file_name).replace(" ", "-")
+    allowed = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-"
+    cleaned = "".join(char for char in name if char in allowed).strip(".-_")
+    if not cleaned:
+        cleaned = "extension.zip"
+    if not cleaned.lower().endswith(".zip"):
+        cleaned += ".zip"
+    return cleaned
 
 
 @app.get("/flow-settings")

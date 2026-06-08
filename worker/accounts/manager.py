@@ -3,11 +3,14 @@ from __future__ import annotations
 import asyncio
 import logging
 import shutil
+import tempfile
+import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from fastapi import HTTPException
+import httpx
 import psutil
 
 from worker.accounts.models import Account, AccountSettings, AccountStatus
@@ -231,6 +234,79 @@ class AccountManager:
     async def handle_flowkit_callback(self, account_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         self._require(account_id)
         return await self.flowkit.handle_callback(account_id, payload)
+
+    async def install_extension_package(self, extension_url: str, version: str | None = None, restart_accounts: bool = True) -> dict[str, Any]:
+        archive = await self._download_extension_archive(extension_url)
+        extension_root = await asyncio.to_thread(self._unpack_extension_archive, archive)
+        running_accounts = [account.id for account in self.list_accounts() if self._browser_is_running(account)]
+
+        async with self._lock:
+            target = self.settings.paths.extension_dir
+            backup = target.with_name(f"{target.name}.backup")
+            shutil.rmtree(backup, ignore_errors=True)
+            if target.exists():
+                shutil.copytree(target, backup)
+                shutil.rmtree(target)
+            shutil.copytree(extension_root, target)
+            shutil.rmtree(backup, ignore_errors=True)
+            cleanup_root = extension_root.parent.parent if extension_root.parent.name == "extract" else extension_root.parent
+            shutil.rmtree(cleanup_root, ignore_errors=True)
+
+        restarted: list[str] = []
+        failed: dict[str, str] = {}
+        if restart_accounts:
+            for account_id in running_accounts:
+                try:
+                    await self.restart_account(account_id)
+                    restarted.append(account_id)
+                except Exception as exc:
+                    logger.exception("failed to restart account after extension install account=%s", account_id)
+                    failed[account_id] = str(exc)
+
+        return {
+            "installed": True,
+            "version": version,
+            "extension_dir": str(self.settings.paths.extension_dir),
+            "running_accounts_before_install": running_accounts,
+            "restarted_accounts": restarted,
+            "failed_accounts": failed,
+            "future_accounts": "will use this extension automatically",
+        }
+
+    async def _download_extension_archive(self, extension_url: str) -> bytes:
+        async with httpx.AsyncClient(timeout=60, follow_redirects=True) as client:
+            response = await client.get(extension_url)
+            response.raise_for_status()
+            body = response.content
+        if len(body) > 25 * 1024 * 1024:
+            raise HTTPException(status_code=413, detail="extension ZIP is larger than 25MB")
+        return body
+
+    def _unpack_extension_archive(self, archive: bytes) -> Path:
+        temp_root = Path(tempfile.mkdtemp(prefix="flow-extension-"))
+        try:
+            archive_path = temp_root / "extension.zip"
+            archive_path.write_bytes(archive)
+            extract_root = temp_root / "extract"
+            extract_root.mkdir()
+            with zipfile.ZipFile(archive_path) as zip_file:
+                for member in zip_file.infolist():
+                    member_path = extract_root / member.filename
+                    if not member_path.resolve().is_relative_to(extract_root.resolve()):
+                        raise HTTPException(status_code=400, detail=f"unsafe ZIP path: {member.filename}")
+                zip_file.extractall(extract_root)
+
+            manifest = extract_root / "manifest.json"
+            if not manifest.exists():
+                matches = list(extract_root.glob("*/manifest.json"))
+                if len(matches) == 1:
+                    manifest = matches[0]
+            if not manifest.exists():
+                raise HTTPException(status_code=400, detail="extension ZIP must contain manifest.json at root or inside one top-level folder")
+            return manifest.parent
+        except Exception:
+            shutil.rmtree(temp_root, ignore_errors=True)
+            raise
 
     def _require(self, account_id: str) -> Account:
         account = self._accounts.get(account_id)

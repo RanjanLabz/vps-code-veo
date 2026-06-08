@@ -93,6 +93,16 @@ class WorkerClient:
         response.raise_for_status()
         return dict(response.json())
 
+    async def install_extension(self, worker: WorkerRecord, payload: dict[str, Any]) -> dict[str, Any]:
+        response = await self._client.post(
+            f"{worker.base_url.rstrip('/')}/extensions/install",
+            json=payload,
+            headers=self._headers(),
+            timeout=90,
+        )
+        response.raise_for_status()
+        return dict(response.json())
+
     async def dispatch(self, worker: WorkerRecord, job: GlobalJob) -> dict[str, Any]:
         body = {
             "prompt": job.prompt,
